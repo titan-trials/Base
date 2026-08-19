@@ -159,7 +159,12 @@ def get_batting_lines(game_pks, verbose: bool = True,
     wanted = sorted({int(pk) for pk in pd.Series(list(game_pks)).dropna().unique()})
     cached = _load_existing()
     have = set(cached["game_pk"].dropna().astype(int)) if not cached.empty else set()
-    if refetch:
+    # `is not None` and `len()`, NOT plain truthiness. score_slate.py passes
+    # a numpy array here (the output of .unique()), and `if some_array:`
+    # raises "The truth value of an array with more than one element is
+    # ambiguous" rather than doing anything useful. Works fine for a list,
+    # which is what this was written and tested against.
+    if refetch is not None and len(refetch) > 0:
         stale = {int(pk) for pk in pd.Series(list(refetch)).dropna().unique()}
         have -= stale
         cached = cached[~cached["game_pk"].isin(stale)] if not cached.empty else cached

@@ -417,6 +417,52 @@ check("a better hitter projects more total bases per PA",
       better > worse, f"({worse:.4f} -> {better:.4f})")
 
 
+# ---------------------------------------------------------------- part 5
+print("\n" + "=" * 72)
+print("PART 5 -- CALLER TYPES (regression)")
+print("=" * 72)
+
+import data.batting_lines as bl
+
+# score_slate.py passes `played["game_pk"].unique()` -- a numpy array --
+# to both game_pks and refetch. The guard was written as `if refetch:`,
+# which raises "truth value of an array with more than one element is
+# ambiguous". It survived every test because the tests passed lists, and
+# it would have survived a ONE-GAME slate too, since a single-element
+# array is unambiguously truthy. It needed two games to fail.
+_real_fetch = bl._fetch_one
+bl._fetch_one = lambda pk: []          # no network in a test
+
+for label, value in [
+    ("numpy array, 3 games", np.array([777001, 777002, 777003])),
+    ("numpy array, 1 game",  np.array([777001])),
+    ("numpy array, empty",   np.array([], dtype=int)),
+    ("pandas Series",        pd.Series([777001, 777002])),
+    ("plain list",           [777001, 777002]),
+    ("None",                 None),
+]:
+    try:
+        bl.get_batting_lines(np.array([777001, 777002]), verbose=False,
+                             refetch=value)
+        ok, detail = True, ""
+    except Exception as e:
+        ok, detail = False, f"({type(e).__name__}: {e})"
+    check(f"refetch accepts {label}", ok, detail)
+
+# game_pks itself takes the same types
+for label, value in [("numpy array", np.array([777001, 777002])),
+                     ("pandas Series", pd.Series([777001, 777002])),
+                     ("list", [777001, 777002])]:
+    try:
+        bl.get_batting_lines(value, verbose=False)
+        ok, detail = True, ""
+    except Exception as e:
+        ok, detail = False, f"({type(e).__name__}: {e})"
+    check(f"game_pks accepts {label}", ok, detail)
+
+bl._fetch_one = _real_fetch
+
+
 print("\n" + "=" * 72)
 if failures:
     print(f"{len(failures)} CHECK(S) FAILED:")
