@@ -23,6 +23,15 @@
 cache/*
 !cache/slate_*.csv
 
+# The Results tab reads this. It is NOT regenerable the way the rest of
+# cache/ is: rescoring an old date needs that date's slate file AND the
+# Statcast pull behind it, and the whole point of the running record is
+# that it accumulates one honest out-of-sample row per prop per day. It
+# grows about seven rows a night -- a few hundred KB a season. Leaving it
+# untracked is why the deployed dashboard said "No slates scored yet"
+# while the local file had 2026-08-18 in it all along.
+!cache/scoring_log.csv
+
 # Regenerable, and the expensive part of the repo:
 #   statcast_player_*.csv    ~1.2 GB, re-pulled by predict_slate.py
 #   statcast_pitcher_*.csv   re-pulled per slate, ~30 starters at a time

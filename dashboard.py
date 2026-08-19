@@ -4,8 +4,9 @@ Slate dashboard.
     python predict_slate.py 2026-08-19
     streamlit run dashboard.py
 
-Four views: the whole slate ranked, one game at a time, tonight's starting
-pitchers, and how the model has actually done.
+Five views: the whole slate ranked, one game at a time, tonight's starting
+pitchers, every hitter in a sortable table, and how the model has actually
+done.
 
 WHY THIS RENDERS ITS OWN HTML
 -----------------------------
@@ -21,6 +22,14 @@ with a width. There is no version of Altair that can get that wrong.
 This file deliberately imports NOTHING from the project -- only glob, os,
 pandas and streamlit. The deployed app therefore needs three packages and
 one CSV, not the whole modelling stack.
+
+THE ONE PLACE THAT DOES *NOT* RENDER ITS OWN HTML
+-------------------------------------------------
+"All hitters" uses Streamlit's native table on purpose. Click-to-sort is
+the entire point of that view, and a div cannot sort itself -- reproducing
+it would mean rebuilding sorting, column resizing and CSV export by hand.
+Everywhere else the layout is the product and the native table cannot
+express it; there, the sorting is the product and the layout is ordinary.
 
 COLOUR: FOUR QUARTILE BANDS, AND WHY NOT FIVE
 ---------------------------------------------
@@ -252,6 +261,26 @@ def html(markup: str):
     st.markdown(markup, unsafe_allow_html=True)
 
 
+def _css_var(name: str) -> str:
+    """
+    Read a colour back out of the stylesheet above.
+
+    The native table in the "All hitters" tab draws to a canvas and never
+    sees the page's CSS custom properties, so its band colours have to
+    arrive as literal hex. Writing that hex out a second time is how the
+    grid and the table drift a shade apart six months from now; parsing it
+    from the one declaration keeps a single source of truth, and raises
+    loudly here at import if a variable is ever renamed.
+    """
+    marker = f"--{name}:"
+    start = CSS.index(marker) + len(marker)
+    return CSS[start:CSS.index(";", start)].strip()
+
+
+# band number -> (background, text), matching the game grid exactly.
+BANDS = {b: (_css_var(f"b{b}bg"), _css_var(f"b{b}ink")) for b in (1, 2, 3, 4)}
+
+
 # ----------------------------------------------------------------- load
 html(CSS)
 slates = available_slates()
@@ -293,8 +322,8 @@ html(f'<div class="sp-head"><div class="sp-mark"></div><div>'
      f'<p class="sp-h1">Slate props</p><div class="sp-sub">{slate_date} · '
      f'{df["game_pk"].nunique()} games · {len(df)} hitters</div></div></div>')
 
-tab_slate, tab_games, tab_pitch, tab_res = st.tabs(
-    ["Slate", "Games", "Pitchers", "Results"])
+tab_slate, tab_games, tab_pitch, tab_all, tab_res = st.tabs(
+    ["Slate", "Games", "Pitchers", "All hitters", "Results"])
 
 
 def context_line(row) -> str:
@@ -475,6 +504,94 @@ with tab_pitch:
              '<th>Over 6.5 K</th></tr></thead><tbody>' + rows + '</tbody></table>')
 
 
+# ---------------------------------------------------------- all hitters
+BASE_LABELS = {"name": "Hitter", "team": "Team", "opponent": "Opp",
+               "lineup_slot": "Slot", "expected_pa": "PA"}
+
+with tab_all:
+    html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
+         'All hitters</div><div style="color:var(--ink3);font-size:12.5px;'
+         'margin-bottom:8px">Every hitter on the slate, every prop. '
+         'Click a column header to sort.</div>')
+
+    query = st.text_input("Search", "", label_visibility="collapsed",
+                          placeholder="Filter by hitter, team or opponent")
+
+    base = [c for c in BASE_LABELS if c in df.columns]
+    view = df[base + list(props)].copy()
+
+    if query.strip():
+        # Plain substring, regex=False. A hitter's name is not a pattern,
+        # and someone typing "O'Neill" or "Jr." should not get a regex
+        # error for their trouble.
+        needle = query.strip().lower()
+        hit = pd.Series(False, index=view.index)
+        for col in ("name", "team", "opponent"):
+            if col in view.columns:
+                hit |= (view[col].astype(str).str.lower()
+                        .str.contains(needle, regex=False, na=False))
+        view = view[hit]
+
+    label_of = {**{c: BASE_LABELS[c] for c in base},
+                **{k: props[k][0] for k in props}}
+    view = view.rename(columns=label_of)
+    prop_labels = [props[k][0] for k in props]
+    # Bands are computed against the WHOLE slate, not against whatever the
+    # search box left behind. Filtering to one team and having its best
+    # hitter turn green would say "good for a Dodger", which is not the
+    # question anyone is asking.
+    cuts_of = {props[k][0]: cuts[k] for k in props}
+
+    default_label = (props[DEFAULT_PROP][0] if DEFAULT_PROP in props
+                     else prop_labels[0])
+    view = view.sort_values(default_label, ascending=False)
+
+    if view.empty:
+        html('<div class="sp-empty">No hitter matches that.</div>')
+    else:
+        def band_fill(series, column_cuts):
+            out = []
+            for value in series:
+                band = band_of(value, column_cuts)
+                if band == 0:
+                    out.append("")
+                else:
+                    bg, ink = BANDS[band]
+                    out.append(f"background-color:{bg};color:{ink}")
+            return out
+
+        styled = view.style
+        for lab in prop_labels:
+            styled = styled.apply(band_fill, column_cuts=cuts_of[lab],
+                                  subset=[lab])
+        fmt = {lab: "{:.1%}" for lab in prop_labels}
+        if "PA" in view.columns:
+            fmt["PA"] = "{:.2f}"
+        if "Slot" in view.columns:
+            fmt["Slot"] = "{:.0f}"
+        styled = styled.format(fmt, na_rep="—")
+
+        st.dataframe(
+            styled, use_container_width=True, hide_index=True, height=620,
+            column_config={
+                # Pinned so the name stays put while the twelve prop
+                # columns scroll sideways past it.
+                "Hitter": st.column_config.Column(pinned=True, width="medium"),
+                "Team": st.column_config.Column(width="small"),
+                "Opp": st.column_config.Column(width="small"),
+                "Slot": st.column_config.Column(width="small"),
+                "PA": st.column_config.Column(width="small"),
+            })
+
+        shown = len(view)
+        html(f'<div style="margin-top:8px;font-size:12px;color:var(--ink3)">'
+             f'{shown} of {len(df)} hitters'
+             f'{" matching your search" if query.strip() else ""} · '
+             f'colour is which quarter of the whole slate the hitter falls '
+             f'into for that prop · hover the table and use the toolbar to '
+             f'download a CSV</div>')
+
+
 # -------------------------------------------------------------- results
 with tab_res:
     html('<div style="font-size:15px;font-weight:640;color:var(--ink);'
@@ -490,13 +607,93 @@ with tab_res:
              'have been played and graded.</span></div>')
     else:
         log = pd.read_csv(log_path)
-        n_slates = log["game_date"].nunique() if "game_date" in log else len(log)
-        graded = int(log["n"].sum()) if "n" in log else 0
-        said = log["mean_pred"].mean() if "mean_pred" in log else float("nan")
-        did = log["base_rate"].mean() if "base_rate" in log else float("nan")
+        n_slates = log["game_date"].nunique()
+
+        # Every prop is graded against the SAME hitters, so summing `n`
+        # across the seven rows of a slate counts each hitter seven times.
+        # One slate of 270 would read "1,890 hitters graded", which is
+        # flattering and false. Take the per-slate figure, then add slates.
+        graded = int(log.groupby("game_date")["n"].max().sum())
+
+        # Pool each prop across slates, weighting by how many hitters that
+        # slate contributed. Averaging the rates unweighted would let a
+        # rained-out four-game night count as much as a full slate.
+        def pooled(g):
+            w = g["n"].sum()
+            said = (g["mean_pred"] * g["n"]).sum() / w
+            did = (g["base_rate"] * g["n"]).sum() / w
+            brier = (g["brier"] * g["n"]).sum() / w
+            # Rebuild skill from the pooled numbers rather than averaging
+            # the per-slate skills: the reference variance is p(1-p) at the
+            # POOLED base rate, and an average of ratios is not the ratio
+            # of the averages.
+            ref = did * (1.0 - did)
+            skill = 1.0 - brier / ref if ref > 0 else float("nan")
+            # How many standard errors the miss is worth. A 2-point gap on
+            # 270 hitters is noise; the same gap on 5,000 is a bias.
+            se = (did * (1.0 - did) / w) ** 0.5 if w else float("nan")
+            sigma = (said - did) / se if se else float("nan")
+            return pd.Series({"n": w, "said": said, "did": did,
+                              "skill": skill, "sigma": sigma})
+
+        # Column list is explicit: `groupby(...).apply()` over the whole
+        # frame warns (and in newer pandas will error) about operating on
+        # the grouping column itself.
+        by_prop = (log.groupby("label", sort=False)
+                      [["n", "mean_pred", "base_rate", "brier"]]
+                      .apply(pooled).reset_index())
+
+        # The headline is the edge, not the average probability: averaging
+        # "11% of hitters homer" against "61% get a hit" produces a number
+        # that describes nothing.
+        head_skill = float((by_prop["skill"] * by_prop["n"]).sum()
+                           / by_prop["n"].sum())
+        worst = float(by_prop["sigma"].abs().max())
+
         html(f'<div class="sp-kpi">'
-             f'<div><span class="v">{n_slates}</span><span class="k">Slates scored</span></div>'
-             f'<div><span class="v">{graded:,}</span><span class="k">Hitters graded</span></div>'
-             f'<div><span class="v">{pct(said)} vs {pct(did)}</span>'
-             f'<span class="k">Model said vs actually happened</span></div></div>')
-        st.dataframe(log, use_container_width=True, hide_index=True)
+             f'<div><span class="v">{n_slates}</span>'
+             f'<span class="k">Slates scored</span></div>'
+             f'<div><span class="v">{graded:,}</span>'
+             f'<span class="k">Hitters graded</span></div>'
+             f'<div><span class="v">{head_skill * 100:+.2f}%</span>'
+             f'<span class="k">Edge over guessing the base rate</span></div>'
+             f'<div><span class="v">{worst:.1f}σ</span>'
+             f'<span class="k">Largest calibration miss</span></div></div>')
+
+        def skill_color(s):
+            if pd.isna(s):
+                return "var(--ink3)"
+            return "var(--b4)" if s > 0.005 else \
+                   "var(--b3)" if s > 0 else "var(--b1)"
+
+        rows = "".join(
+            f'<tr><td style="font-weight:560">{r.label}</td>'
+            f'<td style="color:var(--ink2)">{int(r.n):,}</td>'
+            f'<td>{pct(r.said)}</td>'
+            f'<td>{pct(r.did)}</td>'
+            f'<td style="color:{"var(--ink2)" if abs(r.sigma) < 2 else "var(--warn)"}">'
+            f'{r.sigma:+.1f}σ</td>'
+            f'<td style="color:{skill_color(r.skill)};font-weight:560">'
+            f'{r.skill * 100:+.2f}%</td></tr>'
+            for r in by_prop.itertuples())
+        html('<table class="plain"><thead><tr><th>Prop</th><th>Graded</th>'
+             '<th>Model said</th><th>Actually happened</th>'
+             '<th>Miss</th><th>Edge</th></tr></thead><tbody>'
+             + rows + '</tbody></table>')
+
+        html('<div style="margin-top:14px;font-size:12px;color:var(--ink3);'
+             'line-height:1.55">'
+             '<b style="color:var(--ink2)">Edge</b> is how much of the '
+             'guesswork the model removes versus just quoting the league '
+             'rate for everyone. Positive is good; anything above about '
+             '+1% is real skill. '
+             '<b style="color:var(--ink2)">Miss</b> is the gap between what '
+             'the model expected and what happened, measured in standard '
+             'errors — under 2σ is the sample being small, over 2σ is the '
+             'model being wrong.</div>')
+
+        if n_slates < 10:
+            html(f'<div style="margin-top:12px;font-size:12px;'
+                 f'color:var(--ink3)">Based on {n_slates} '
+                 f'slate{"" if n_slates == 1 else "s"}. Roughly ten are '
+                 f'needed before these numbers stop moving around.</div>')
