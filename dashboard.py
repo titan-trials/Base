@@ -512,7 +512,8 @@ with tab_all:
     html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
          'All hitters</div><div style="color:var(--ink3);font-size:12.5px;'
          'margin-bottom:8px">Every hitter on the slate, every prop. '
-         'Click a column header to sort.</div>')
+         'Hover a column header and use its ⋮ menu to sort, pin or hide it.'
+         '</div>')
 
     query = st.text_input("Search", "", label_visibility="collapsed",
                           placeholder="Filter by hitter, team or opponent")
@@ -588,8 +589,12 @@ with tab_all:
              f'{shown} of {len(df)} hitters'
              f'{" matching your search" if query.strip() else ""} · '
              f'colour is which quarter of the whole slate the hitter falls '
-             f'into for that prop · hover the table and use the toolbar to '
-             f'download a CSV</div>')
+             f'into for that prop · hover the table for a toolbar with '
+             f'search, fullscreen and CSV download</div>'
+             f'<div style="margin-top:4px;font-size:12px;color:var(--ink3)">'
+             f'Dragging a header moves that column, which is easy to do by '
+             f'accident while scrolling sideways — reload the page to put '
+             f'them back in order.</div>')
 
 
 # -------------------------------------------------------------- results
