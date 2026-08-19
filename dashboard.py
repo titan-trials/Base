@@ -117,6 +117,36 @@ CSS = """
 .stApp{background:var(--bg)}
 #MainMenu,footer,header[data-testid="stHeader"]{visibility:hidden}
 .block-container{padding-top:1.6rem;max-width:1300px}
+
+/* ---- "All hitters" breaks out of the 1300px column -----------------
+   Twelve prop columns do not fit in the width the rest of the page is
+   tuned for, and the overflow lands on Walk -- a column most people
+   would never discover, because a table that scrolls sideways does not
+   look like a table that scrolls sideways.
+
+   Only this one tab widens. The Slate and Games views are laid out for
+   a comfortable reading measure and stretching them to 1900px would
+   pull the leaderboard rows apart for no gain.
+
+   Matched on a marker div rather than :nth-of-type(4), so inserting or
+   reordering a tab later cannot silently widen the wrong one. If a
+   future Streamlit renames the panel attribute the rule stops matching
+   and the tab goes back to 1300px -- visibly plain, not subtly broken.
+
+   The attribute is data-testid="stTabPanel". It is NOT the
+   data-baseweb="tab-panel" that older write-ups give; that one silently
+   matches nothing, which looks exactly like "the CSS had no effect".
+
+   Only the TABLE breaks out, not the whole panel. Widening the panel
+   drags the heading, the search box and the footnotes out with it, and
+   they end up starting 120px left of the tab bar directly above them --
+   which reads as a layout bug rather than as a wide table. */
+div[data-testid="stTabPanel"]:has(.sp-wide)
+ div[data-testid="stElementContainer"]:has(div[data-testid="stDataFrame"]){
+ width:min(96vw,1900px);
+ max-width:none;
+ margin-left:calc(50% - min(48vw,950px));
+}
 .sp-head{display:flex;align-items:center;gap:13px;margin-bottom:6px}
 .sp-mark{width:30px;height:30px;border-radius:8px;flex:none;
  background:linear-gradient(140deg,var(--accent),#1c5cab);position:relative}
@@ -197,6 +227,18 @@ div[data-testid="stHorizontalBlock"]{gap:7px;margin-bottom:6px}
 .stTabs [aria-selected="true"]{color:var(--ink)!important}
 </style>
 """
+
+# An unbalanced comment marker in the block above does not fail loudly. The
+# browser swallows everything from the stray token to the next `*/` it can
+# find, the page still renders, and the only symptom is that some rule "had
+# no effect" -- which reads as a selector that did not match and sends you
+# looking in entirely the wrong place. Cost of finding that by hand once:
+# about forty minutes. Cost of this check: one line.
+if CSS.count("/*") != CSS.count("*/"):
+    raise ValueError(
+        f"dashboard CSS has {CSS.count('/*')} '/*' against "
+        f"{CSS.count('*/')} '*/' -- an unbalanced comment will silently "
+        f"disable the rules around it.")
 
 
 def fmt_clock(ts) -> str:
@@ -508,8 +550,29 @@ with tab_pitch:
 BASE_LABELS = {"name": "Hitter", "team": "Team", "opponent": "Opp",
                "lineup_slot": "Slot", "expected_pa": "PA"}
 
+# Hover text for the prop columns. "TB 1.5" is unreadable to anyone who has
+# not been staring at this for a week, and the header itself has no room to
+# say more -- that is the whole reason the columns fit now.
+PROP_HELP = {
+    "prob_hr":            "Chance he hits at least one home run",
+    "prob_tb_over_1.5":   "Chance of 2+ total bases — a double, or two singles",
+    "prob_tb_over_2.5":   "Chance of 3+ total bases",
+    "prob_tb_over_3.5":   "Chance of 4+ total bases",
+    "prob_hit":           "Chance of at least one hit",
+    "prob_hits_over_1.5": "Chance of 2+ hits",
+    "prob_hits_over_2.5": "Chance of 3+ hits",
+    "prob_hrr_over_0.5":  "Chance of at least one hit, run scored or RBI. "
+                          "Walks do not count.",
+    "prob_hrr_over_1.5":  "Chance of 2+ hits, runs and RBI combined",
+    "prob_hrr_over_2.5":  "Chance of 3+ hits, runs and RBI combined",
+    "prob_hrr_over_3.5":  "Chance of 4+ hits, runs and RBI combined",
+    "prob_walk":          "Chance he draws at least one walk",
+}
+
 with tab_all:
-    html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
+    # Marker the CSS above keys on to widen this panel and only this one.
+    html('<div class="sp-wide"></div>'
+         '<div style="font-size:15px;font-weight:640;color:var(--ink)">'
          'All hitters</div><div style="color:var(--ink3);font-size:12.5px;'
          'margin-bottom:8px">Every hitter on the slate, every prop. '
          'Hover a column header and use its ⋮ menu to sort, pin or hide it.'
@@ -572,17 +635,31 @@ with tab_all:
             fmt["Slot"] = "{:.0f}"
         styled = styled.format(fmt, na_rep="—")
 
-        st.dataframe(
-            styled, use_container_width=True, hide_index=True, height=620,
-            column_config={
-                # Pinned so the name stays put while the twelve prop
-                # columns scroll sideways past it.
-                "Hitter": st.column_config.Column(pinned=True, width="medium"),
-                "Team": st.column_config.Column(width="small"),
-                "Opp": st.column_config.Column(width="small"),
-                "Slot": st.column_config.Column(width="small"),
-                "PA": st.column_config.Column(width="small"),
-            })
+        # Explicit pixel widths on the five identity columns. Left to size
+        # themselves they take 75px each -- a 75px column for a one-digit
+        # batting slot -- and those wasted pixels are exactly what pushed
+        # Walk off the right edge on a 1440px screen.
+        config = {
+            # Pinned, so the name stays put if the table does end up
+            # scrolling on a narrow window.
+            "Hitter": st.column_config.Column(pinned=True, width=170),
+            "Team": st.column_config.Column(width=58),
+            "Opp": st.column_config.Column(width=58,
+                                           help="Team he is facing tonight"),
+            "Slot": st.column_config.Column(
+                width=48, help="Where he bats in the order, 1 through 9"),
+            "PA": st.column_config.Column(
+                width=58,
+                help="Plate appearances the model expects him to get. "
+                     "Everything else scales off this -- a leadoff hitter "
+                     "gets roughly one more trip than the number nine."),
+        }
+        for key, (lab, _fam) in props.items():
+            if lab in view.columns:
+                config[lab] = st.column_config.Column(help=PROP_HELP.get(key))
+
+        st.dataframe(styled, use_container_width=True, hide_index=True,
+                     height=620, column_config=config)
 
         shown = len(view)
         html(f'<div style="margin-top:8px;font-size:12px;color:var(--ink3)">'
@@ -592,9 +669,9 @@ with tab_all:
              f'into for that prop · hover the table for a toolbar with '
              f'search, fullscreen and CSV download</div>'
              f'<div style="margin-top:4px;font-size:12px;color:var(--ink3)">'
-             f'Dragging a header moves that column, which is easy to do by '
-             f'accident while scrolling sideways — reload the page to put '
-             f'them back in order.</div>')
+             f'Hover any column header for what it means. Dragging a header '
+             f'moves that column — reload the page to put them back in '
+             f'order.</div>')
 
 
 # -------------------------------------------------------------- results
