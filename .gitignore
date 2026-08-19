@@ -1,0 +1,67 @@
+# =====================================================================
+# WHAT BELONGS IN THIS REPO
+# =====================================================================
+# Code, and the one data file the deployed dashboard cannot run without.
+# Everything else in cache/ is REGENERABLE by re-running the scripts, and
+# putting it in git costs a lot for nothing:
+#
+#   .git was 1.1 GB against 1.8 GB of cache, with 294 Statcast pulls and
+#   2,870 cache files tracked. GitHub soft-warns at 1 GB and refuses
+#   pushes over 2 GB, and every night's run adds more.
+#
+# The deployed Streamlit app reads exactly ONE thing: cache/slate_*.csv.
+# dashboard.py imports only glob, os, pandas, streamlit and altair -- no
+# project modules -- so nothing else in cache/ is reachable from it.
+# predict_slate.py needs the rest, and predict_slate.py runs on your
+# machine, not on Streamlit's.
+# =====================================================================
+
+# --- Everything in cache/, then the exceptions -----------------------
+# NOTE the pattern is `cache/*` and not `cache/`. Git will not look inside
+# an ignored DIRECTORY, so ignoring `cache/` would make the negations
+# below unreachable and the slate files would never be committed.
+cache/*
+!cache/slate_*.csv
+
+# Regenerable, and the expensive part of the repo:
+#   statcast_player_*.csv    ~1.2 GB, re-pulled by predict_slate.py
+#   statcast_pitcher_*.csv   re-pulled per slate, ~30 starters at a time
+#   batting_lines.csv        ~10 MB, one ~30-min backfill
+#   lineup_slots.csv         ~6 MB, refetched incrementally
+#   game_context.csv         weather/venue, refetched incrementally
+# Losing these costs time, not information -- but do NOT delete them
+# casually. Untracking (see below) leaves them on disk untouched.
+
+# --- Python ----------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+
+# --- Virtual environments --------------------------------------------
+# The venv lives at C:\venvs\baseball, OUTSIDE this folder, deliberately:
+# OneDrive locks files inside synced directories and corrupted the first
+# one mid-delete. venv_broken/ is the corpse of that attempt.
+venv/
+venv_broken/
+.venv/
+env/
+ENV/
+
+# --- Editors / OS ----------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Streamlit -------------------------------------------------------
+# secrets.toml can hold credentials. config.toml is fine to commit if you
+# want the deployed theme to match local.
+.streamlit/secrets.toml
+
+# --- Scratch ---------------------------------------------------------
+*.log
+chart_check*.png
+/tmp/

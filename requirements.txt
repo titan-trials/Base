@@ -1,0 +1,74 @@
+# Baseball Predictor dependencies
+#
+# Install with:
+#     python -m pip install -r requirements.txt
+#
+# Use `python -m pip`, NOT bare `pip`. This project's venv was created at
+# C:\Users\logic\Downloads\baseball_predictor\venv and the folder was later
+# moved to OneDrive\Desktop. Windows venvs are not relocatable -- the .exe
+# launchers in Scripts\ have the absolute path to python.exe compiled into
+# the binary, so pip.exe still points at the old Downloads path and fails
+# with "Unable to create process". `python -m pip` bypasses the launcher
+# entirely and works fine.
+#
+# This file is UTF-8. The previous version was UTF-16, which is what
+# PowerShell's `pip freeze > requirements.txt` produces by default -- and
+# pip cannot read it. If you regenerate it, use:
+#     python -m pip freeze | Out-File -Encoding utf8 requirements.txt
+
+# --- Core: pinned, load-bearing --------------------------------------
+# pandas MUST stay below 3.0. pybaseball's schedule_and_record() uses a
+# chained-assignment inplace=True pattern that silently no-ops under the
+# Copy-on-Write behaviour pandas 3.0 makes mandatory. This is a bug inside
+# pybaseball, not something fixable from this project. Do not "upgrade".
+pandas==2.3.3
+numpy==2.5.1
+scikit-learn==1.9.0
+scipy==1.18.0
+pybaseball==2.2.7
+
+# --- Dashboard --------------------------------------------------------
+streamlit
+altair
+
+# --- MLB Stats API (schedule, lineups, weather, rosters) --------------
+# data/schedule.py, data/roster.py, data/lineup_slots.py and
+# data/game_context.py all call statsapi.mlb.com over plain urllib, so this
+# package is only needed by data/probable_pitchers.py.
+MLB-StatsAPI
+
+# --- Everything else --------------------------------------------------
+attrs==26.1.0
+beautifulsoup4==4.15.0
+certifi==2026.7.22
+cffi==2.1.0
+charset-normalizer==3.4.9
+colorama==0.4.6
+contourpy==1.3.3
+cryptography==50.0.0
+cycler==0.12.1
+fonttools==4.63.0
+idna==3.18
+joblib==1.5.3
+kiwisolver==1.5.0
+lxml==6.1.1
+matplotlib==3.11.1
+narwhals==2.24.0
+packaging==26.2
+pillow==12.3.0
+pyarrow==25.0.0
+pycparser==3.0
+PyGithub==2.9.1
+PyJWT==2.13.0
+PyNaCl==1.6.2
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+pytz==2026.3.post1
+requests==2.34.2
+six==1.17.0
+soupsieve==2.9.1
+threadpoolctl==3.6.0
+tqdm==4.70.0
+typing_extensions==4.16.0
+tzdata==2026.3
+urllib3==2.7.0

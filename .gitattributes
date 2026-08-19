@@ -1,0 +1,31 @@
+# Line endings, settled once.
+#
+# WHY THIS EXISTS
+# ---------------
+# Without it, 29 files showed as modified having had nothing done to them:
+# 188 insertions and 188 deletions across four files, every line "changed",
+# and `git diff --ignore-all-space` showing zero actual differences. The
+# files were written to disk with CRLF while the repo held LF, and with
+# core.autocrlf unset git treats that as real content.
+#
+# That is worse than cosmetic. A diff where every line changed hides the
+# one line that actually did, and this project's whole debugging method
+# has been reading diffs carefully.
+#
+# `text=auto eol=lf` means: git decides what is text, stores it with LF in
+# the repository, and checks it out with LF. The deployed dashboard runs on
+# Linux, so LF everywhere also means the file on Streamlit Cloud is
+# byte-identical to the file on this machine.
+#
+# Python, pandas and every editor worth using handle LF on Windows without
+# complaint. If some tool ever does complain, the fix is to give that one
+# file its own rule below -- not to turn this off.
+* text=auto eol=lf
+
+# Explicitly binary, so git never tries to normalise or diff them as text.
+*.png binary
+*.jpg binary
+*.pdf binary
+*.joblib binary
+*.pkl binary
+*.parquet binary
