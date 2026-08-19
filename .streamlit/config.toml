@@ -1,0 +1,18 @@
+# Forced dark. The dashboard's colours -- the four quartile bands in
+# particular -- were selected and validated against the dark surface
+# (#121212). On a light surface the same steps fail contrast, so letting
+# the theme follow the viewer's OS setting would silently ship an
+# unvalidated palette.
+[theme]
+base = "dark"
+backgroundColor = "#121212"
+secondaryBackgroundColor = "#232322"
+textColor = "#ffffff"
+primaryColor = "#3987e5"
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
