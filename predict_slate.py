@@ -101,6 +101,74 @@ USE_REAL_PITCHER_DATA = True
 SHAPE_METHOD = "frequency"   # chosen by select_tilt_method on the backtest
 
 
+def preserve_committed_rows(fresh, existing_path, now_utc, force):
+    """
+    Keep rows for games that have already started; take the rest from `fresh`.
+
+    A prediction for a game already in progress is evidence -- it was made
+    without knowing the outcome. A prediction made NOW for that same game is
+    not, because the rolling rates behind it may already contain the game's
+    own results. So on a re-run the old rows win for games underway, and the
+    new rows win for everything still to come.
+
+    Games in the previous file that are missing from `fresh` are kept too. A
+    postponement or a lineup that stopped being published should not silently
+    delete a prediction that was committed to hours earlier.
+    """
+    if force or not os.path.exists(existing_path):
+        return fresh
+    try:
+        previous = pd.read_csv(existing_path)
+    except Exception as exc:
+        print(f"\n  Could not read the previous slate file ({exc}).")
+        print(f"  Writing fresh predictions for every game.")
+        return fresh
+    if previous.empty or "start_time_utc" not in previous.columns:
+        return fresh
+
+    # pd.Timestamp.utcnow() already carries UTC, so tz_localize on it raises
+    # -- and it would raise at SAVE time, after the whole ten-minute run.
+    # Normalise instead of assuming which of the two it is.
+    now = pd.Timestamp(now_utc)
+    now = now.tz_localize("UTC") if now.tz is None else now.tz_convert("UTC")
+
+    started = pd.to_datetime(previous["start_time_utc"], utc=True,
+                             errors="coerce") <= now
+    committed = previous[started.fillna(False)]
+    if committed.empty:
+        print(f"\n  No game in the previous file had started yet -- "
+              f"refreshing all {fresh['game_pk'].nunique()} games.")
+        return fresh
+
+    # A column set that does not match means the two halves of this file were
+    # produced by different versions of the code. Concatenating them anyway
+    # yields a slate where some games have prop columns and others have NaN,
+    # which every downstream reader will treat as "no prediction" rather than
+    # "written by older code". Say so rather than letting it pass.
+    missing = set(fresh.columns) - set(committed.columns)
+    extra = set(committed.columns) - set(fresh.columns)
+    if missing or extra:
+        print(f"\n  NOTE: the preserved rows were written by a different "
+              f"version of this script.")
+        if missing:
+            print(f"  They lack: {', '.join(sorted(missing))}")
+        if extra:
+            print(f"  They carry extra: {', '.join(sorted(extra))}")
+        print(f"  Those games keep their original predictions and will score "
+              f"on the props they have.")
+
+    keep_pks = set(committed["game_pk"].unique())
+    refreshed = fresh[~fresh["game_pk"].isin(keep_pks)]
+    combined = pd.concat([committed, refreshed], ignore_index=True)
+
+    print(f"\n  Preserved {len(committed)} hitters across {len(keep_pks)} game(s) "
+          f"already underway,")
+    print(f"  written earlier and still clean. Refreshed "
+          f"{refreshed['game_pk'].nunique()} game(s) not yet started.")
+    print(f"  Use --force to overwrite the preserved rows as well.")
+    return combined
+
+
 def main(game_date: str = None):
     game_date = game_date or tomorrow()
     print("=" * 72)
@@ -123,34 +191,25 @@ def main(game_date: str = None):
     #
     # So: refuse, rather than warn. `--force` is there for when overwriting
     # is genuinely what you want.
+    # Re-running is NORMAL, not an accident to be prevented.
+    #
+    # Lineups are posted a couple of hours before each game, so on a fifteen
+    # game slate the cards trickle in across the afternoon. Getting confirmed
+    # lineups for the late games means re-running, and the old behaviour --
+    # refuse outright, or overwrite everything with --force -- made that a
+    # choice between stale lineups and destroying the morning's clean
+    # predictions for games already being played.
+    #
+    # Neither is necessary. A prediction is only spoiled for games that have
+    # already started; games still to come are untouched. So a re-run now
+    # PRESERVES rows for games underway and refreshes only the rest. Running
+    # it five times an afternoon accumulates clean coverage instead of
+    # trading it away.
+    #
+    # --force still exists and now means what it says: throw away the
+    # previous file entirely, including its committed rows.
     force = "--force" in sys.argv
     existing_path = cache_path(f"slate_{game_date}")
-    if os.path.exists(existing_path) and not force:
-        try:
-            previous = pd.read_csv(existing_path)
-            written = pd.to_datetime(previous["predicted_at_utc"], utc=True,
-                                     errors="coerce").min()
-            first_pitch = pd.to_datetime(previous["start_time_utc"], utc=True,
-                                         errors="coerce").min()
-        except Exception:
-            written = first_pitch = pd.NaT
-
-        if pd.notna(written) and pd.notna(first_pitch) and written < first_pitch:
-            lead = (first_pitch - written).total_seconds() / 60.0
-            print(f"\n  REFUSING to overwrite cache/slate_{game_date}.csv.")
-            print(f"\n  That file was written {lead:.0f} minutes before first "
-                  f"pitch, which makes it")
-            print(f"  a clean out-of-sample prediction -- the only kind worth "
-                  f"scoring.")
-            print(f"  Overwriting it now would replace numbers committed in "
-                  f"advance with")
-            print(f"  numbers computed from data that may already include the "
-                  f"outcomes.")
-            print(f"\n  Score it instead:   python score_slate.py {game_date}")
-            print(f"  Or, if you really mean it:")
-            print(f"                      python predict_slate.py {game_date} "
-                  f"--force\n")
-            return
 
     # A past date is a trap worth naming even when no file exists yet.
     # Re-running for a date whose games are finished pulls those results
@@ -626,10 +685,17 @@ def main(game_date: str = None):
     # first pitch: a file written AFTER the games is not an out-of-sample
     # prediction, it's a memory, and it must not be scored as though it
     # were. Stored in UTC so it compares cleanly to the schedule feed.
-    frame["predicted_at_utc"] = pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Stamped per ROW, not per file. After a re-run the rows in this file
+    # come from different moments -- the noon games from the morning pass,
+    # the night games from this one -- and score_slate.py decides row by row
+    # whether each was written before its own first pitch. One timestamp for
+    # the whole file cannot express that.
+    now_utc = pd.Timestamp.utcnow()
+    frame["predicted_at_utc"] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     out_cols.append("predicted_at_utc")
 
     out = frame[[c for c in out_cols if c in frame.columns]].copy()
+    out = preserve_committed_rows(out, existing_path, now_utc, force)
     out = out.sort_values(["game_pk", "lineup_slot"], na_position="last")
 
     path = cache_path(f"slate_{game_date}")

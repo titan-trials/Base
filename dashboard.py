@@ -688,7 +688,42 @@ with tab_res:
              '<span style="color:var(--ink3);font-size:12px">Fills in once games '
              'have been played and graded.</span></div>')
     else:
-        log = pd.read_csv(log_path)
+        raw = pd.read_csv(log_path)
+
+        # Read the CLEAN columns -- hitters whose prediction was written
+        # before their own game started. Lineups get posted at different
+        # times, so a night usually involves re-running the predictor, and
+        # rows for games already underway are graded against outcomes the
+        # rolling rates may already contain. Those rows stay in the log and
+        # are still there to look at; they just do not set this number.
+        #
+        # Rows written before score_slate recorded the distinction have no
+        # clean_* columns. Fall back to their plain values rather than
+        # dropping the slate -- the distinction did not exist to record.
+        log = raw.copy()
+        for col in ("n", "base_rate", "mean_pred", "brier"):
+            clean_col = f"clean_{col}"
+            if clean_col in log.columns:
+                log[col] = log[clean_col].fillna(log[col])
+        log = log[log["n"].fillna(0) > 0]
+
+        # If nothing anywhere was written pre-game, show the full-slate
+        # numbers rather than an empty page -- but say plainly what they
+        # are. st.stop() would have been the obvious move here and is the
+        # wrong one: it halts the whole script, not just this tab.
+        full_graded = int(raw.groupby("game_date")["n"].max().sum())
+
+        showing_tainted = log.empty
+        if showing_tainted:
+            log = raw.copy()
+            html('<div style="border:1px solid var(--warn);border-radius:9px;'
+                 'padding:11px 13px;margin-bottom:14px;font-size:12.5px;'
+                 'color:var(--ink2)"><b style="color:var(--warn)">'
+                 'Not out-of-sample.</b> No scored slate has predictions '
+                 'written before first pitch, so the numbers below are '
+                 'measuring hindsight, not forecasting. Run the predictor '
+                 'before games start.</div>')
+
         n_slates = log["game_date"].nunique()
 
         # Every prop is graded against the SAME hitters, so summing `n`
@@ -736,7 +771,9 @@ with tab_res:
              f'<div><span class="v">{n_slates}</span>'
              f'<span class="k">Slates scored</span></div>'
              f'<div><span class="v">{graded:,}</span>'
-             f'<span class="k">Hitters graded</span></div>'
+             f'<span class="k">'
+             f'{"Hitters graded" if graded >= full_graded else "Clean hitters graded"}'
+             f'</span></div>'
              f'<div><span class="v">{head_skill * 100:+.2f}%</span>'
              f'<span class="k">Edge over guessing the base rate</span></div>'
              f'<div><span class="v">{worst:.1f}σ</span>'
@@ -773,6 +810,14 @@ with tab_res:
              'the model expected and what happened, measured in standard '
              'errors — under 2σ is the sample being small, over 2σ is the '
              'model being wrong.</div>')
+
+        if not showing_tainted and graded < full_graded:
+            html(f'<div style="margin-top:8px;font-size:12px;color:var(--ink3);'
+                 f'line-height:1.55">Counts only the {graded:,} hitters whose '
+                 f'prediction was written before their own game started. The '
+                 f'other {full_graded - graded:,} were predicted after first '
+                 f'pitch — usually a re-run to pick up late lineups — and are '
+                 f'kept in the log but left out of these numbers.</div>')
 
         if n_slates < 10:
             html(f'<div style="margin-top:12px;font-size:12px;'

@@ -63,6 +63,11 @@ from model.hr_v4 import evaluate, bootstrap_brier_skill, reliability_by_quantile
 
 SCORING_LOG_KEY = "scoring_log"
 
+# Per-row flag: was this hitter's prediction written before HIS game started?
+# Leading underscore so it never collides with a real slate column and is
+# obvious as internal if it ever leaks into a printout.
+CLEAN_COL = "_clean_row"
+
 # prediction column -> (actual column, human label, is_count_line)
 BINARY_PROPS = {
     "prob_hr": ("got_hr", "at least 1 home run"),
@@ -155,6 +160,60 @@ def score_prop(merged: pd.DataFrame, prediction_col: str, actual_col: str,
     return result
 
 
+def clean_mask(frame) -> pd.Series:
+    """
+    True for rows whose prediction was written before THAT row's game began.
+
+    NaT on either side yields False rather than NaN: a row we cannot date is
+    a row we cannot vouch for, and the safe default for "is this evidence"
+    is no.
+    """
+    if "predicted_at_utc" not in frame.columns or "start_time_utc" not in frame.columns:
+        return pd.Series(False, index=frame.index)
+    written = pd.to_datetime(frame["predicted_at_utc"], utc=True, errors="coerce")
+    start = pd.to_datetime(frame["start_time_utc"], utc=True, errors="coerce")
+    return (written < start).fillna(False)
+
+
+def score_frame(frame) -> list:
+    """
+    Every prop scored against one frame. Returns a list of result dicts.
+
+    Pulled out of main() so the identical scoring can run twice -- once over
+    the whole slate and once over the clean subset -- with no chance of the
+    two drifting into slightly different definitions.
+    """
+    work = frame.copy()
+    rows = []
+    for prediction_col, (actual_col, label) in BINARY_PROPS.items():
+        if prediction_col not in work or actual_col not in work:
+            continue
+        result = score_prop(work, prediction_col, actual_col, label)
+        if result:
+            rows.append(result)
+
+    # Each prop: (prediction-column prefix, actual column, label). Total
+    # bases and hits come straight off the PA table -- both settle inside
+    # the plate appearance, so unlike H+R+RBI they need no official
+    # boxscore join to be scored honestly.
+    COUNT_PROPS = [
+        (HRR_PREFIX, "hrr", "H+R+RBI"),
+        ("prob_tb_over_", "total_bases", "Total bases"),
+        ("prob_hits_over_", "hits", "Hits"),
+    ]
+    for prefix, actual_col, label in COUNT_PROPS:
+        if actual_col not in work.columns:
+            continue
+        for column in [c for c in work.columns if c.startswith(prefix)]:
+            line = float(column[len(prefix):])
+            flag = f"_actual_{actual_col}_over_{line}"
+            work[flag] = (work[actual_col] > line).astype(int)
+            result = score_prop(work, column, flag, f"{label} over {line}")
+            if result:
+                rows.append(result)
+    return rows
+
+
 def main(game_date: str = None):
     if game_date is None:
         raise SystemExit("Usage: python score_slate.py YYYY-MM-DD")
@@ -193,28 +252,46 @@ def main(game_date: str = None):
         print(f"  Lineup status when written: "
               f"{predictions['lineup_status'].value_counts().to_dict()}")
 
-    # Verify the prediction actually predates the games. Without this the
-    # scoring loop can be silently poisoned: regenerate a slate after the
-    # fact and the "out-of-sample" result becomes a measure of hindsight.
-    if "predicted_at_utc" in predictions.columns and "start_time_utc" in predictions.columns:
-        written = pd.to_datetime(predictions["predicted_at_utc"], utc=True,
-                                 errors="coerce").min()
-        first_pitch = pd.to_datetime(predictions["start_time_utc"], utc=True,
-                                     errors="coerce").min()
-        if pd.notna(written) and pd.notna(first_pitch):
-            if written >= first_pitch:
-                print("\n  *** WARNING: predictions were written AFTER first pitch ***")
-                print(f"  written {written}, first pitch {first_pitch}.")
-                print("  This is NOT a clean out-of-sample test -- the model's")
-                print("  rolling rates may already contain these games' outcomes.")
-                print("  Scoring anyway, but do not add this to the running total.\n")
-            else:
-                lead = (first_pitch - written).total_seconds() / 3600.0
-                print(f"  Written {lead:.1f}h before first pitch -- clean "
-                      f"out-of-sample.")
-    else:
+    # Cleanliness is a property of each GAME, not of the slate.
+    #
+    # Lineups get posted at different times and games start at different
+    # times, so a normal night means re-running the predictor a few times as
+    # cards are confirmed. A prediction written at 6:34pm is worthless for
+    # the 12:35pm game -- that one is already inside the rolling rates -- and
+    # perfectly clean for the 10:40pm game, which has not been played yet.
+    #
+    # The previous version of this compared ONE write time against the
+    # EARLIEST first pitch and condemned the entire night on that basis. On
+    # 2026-08-19 that meant discarding 162 legitimate out-of-sample rows in
+    # order to avoid 108 tainted ones.
+    #
+    # Worse, it printed "do not add this to the running total" and then added
+    # it to the running total anyway, four hundred lines further down. The
+    # instruction was addressed to the human and ignored by the program.
+    predictions[CLEAN_COL] = clean_mask(predictions)
+    if CLEAN_COL not in predictions or not predictions[CLEAN_COL].notna().any():
         print("  NOTE: this slate has no predicted_at_utc stamp, so it cannot be")
         print("  verified as pre-game. Treat the result with caution.")
+    else:
+        n_clean = int(predictions[CLEAN_COL].sum())
+        games_all = predictions["game_pk"].nunique()
+        games_clean = predictions.loc[predictions[CLEAN_COL], "game_pk"].nunique()
+        if n_clean == len(predictions):
+            print(f"  All {n_clean} hitters were written before their game's "
+                  f"first pitch -- fully clean slate.")
+        elif n_clean == 0:
+            print("\n  *** EVERY game had already started when this was "
+                  "written ***")
+            print("  There is no clean subset here. The full-slate numbers are")
+            print("  reported below and logged, but they measure hindsight, not")
+            print("  prediction. Do not read them as model performance.\n")
+        else:
+            print(f"  Clean: {n_clean} hitters across {games_clean} of "
+                  f"{games_all} games, written before their own first pitch.")
+            print(f"  Tainted: {len(predictions) - n_clean} hitters across "
+                  f"{games_all - games_clean} games already underway.")
+            print(f"  Both are scored below. The headline and the running "
+                  f"total use the clean rows.")
 
     actuals = load_actuals(predictions, game_date)
 
@@ -239,72 +316,110 @@ def main(game_date: str = None):
     print("RESULTS -- model versus 'just quote the base rate'")
     print("=" * 72)
 
-    rows = []
-    for prediction_col, (actual_col, label) in BINARY_PROPS.items():
-        if prediction_col not in merged or actual_col not in merged:
-            continue
-        result = score_prop(merged, prediction_col, actual_col, label)
-        if result:
-            rows.append(result)
+    for missing in ("hrr", "total_bases", "hits"):
+        if missing not in merged.columns:
+            print(f"  (no `{missing}` column -- skipping those lines)")
 
-    # ---- Count lines --------------------------------------------------
-    # Each prop: (prediction-column prefix, actual column, label). Total
-    # bases and hits come straight off the PA table -- both settle inside
-    # the plate appearance, so unlike H+R+RBI they need no official
-    # boxscore join to be scored honestly.
-    COUNT_PROPS = [
-        (HRR_PREFIX, "hrr", "H+R+RBI"),
-        ("prob_tb_over_", "total_bases", "Total bases"),
-        ("prob_hits_over_", "hits", "Hits"),
-    ]
-    for prefix, actual_col, label in COUNT_PROPS:
-        if actual_col not in merged.columns:
-            print(f"  (no `{actual_col}` column -- skipping {label})")
-            continue
-        for column in [c for c in merged.columns if c.startswith(prefix)]:
-            line = float(column[len(prefix):])
-            flag = f"_actual_{actual_col}_over_{line}"
-            merged[flag] = (merged[actual_col] > line).astype(int)
-            result = score_prop(merged, column, flag, f"{label} over {line}")
-            if result:
-                rows.append(result)
-
+    rows = score_frame(merged)
     if not rows:
         raise SystemExit("Nothing scoreable in this slate file.")
 
-    table = pd.DataFrame(rows)[
-        ["label", "n", "base_rate", "mean_pred", "auc", "brier", "brier_skill"]
-    ]
+    COLS = ["label", "n", "base_rate", "mean_pred", "auc", "brier", "brier_skill"]
+    table = pd.DataFrame(rows)[COLS]
+
+    # The same scoring over the rows that were genuinely predicted in
+    # advance. score_prop returns None below 30 rows, so a night with only
+    # one or two early games simply produces no clean table rather than a
+    # meaningless one computed from 14 hitters.
+    clean_frame = merged[merged[CLEAN_COL]] if CLEAN_COL in merged else merged.iloc[0:0]
+    rows_clean = score_frame(clean_frame) if len(clean_frame) >= 30 else []
+    table_clean = (pd.DataFrame(rows_clean)[COLS] if rows_clean
+                   else pd.DataFrame(columns=COLS))
+
+    fully_clean = len(clean_frame) == len(merged) and len(merged) > 0
     print()
-    print(table.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+    if fully_clean:
+        print(table.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+    else:
+        # Show them next to each other. The whole point of keeping both is
+        # that the difference between them is the size of the leakage, and
+        # a number you have to go and look up somewhere else is a number
+        # nobody looks up.
+        side = table.merge(table_clean, on="label", how="left",
+                           suffixes=("", "_clean"))
+        view = side[["label", "n", "brier_skill", "n_clean", "brier_skill_clean"]]
+        view = view.rename(columns={"n": "n_all", "brier_skill": "skill_all",
+                                    "n_clean": "n_clean",
+                                    "brier_skill_clean": "skill_clean"})
+        view["gap"] = view["skill_all"] - view["skill_clean"]
+        print(view.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+        print("\n  skill_all   = every hitter, including games already underway")
+        print("  skill_clean = only hitters predicted before their game began")
+        print("  gap         = how much the tainted rows flattered the result.")
+        print("                Large and positive means hindsight was doing the work.")
+        print("\n  Full detail on the clean rows:")
+        if rows_clean:
+            print(table_clean.to_string(index=False,
+                                        float_format=lambda v: f"{v:.4f}"))
+        else:
+            print("  (too few clean rows to score -- fewer than 30)")
+
     print("\n  base_rate  = what actually happened")
     print("  mean_pred  = what the model said on average (should be close)")
     print("  brier_skill = the headline. Positive beats quoting the base rate.")
 
     # ---- Is one day enough? (no) --------------------------------------
-    headline = next((r for r in rows if r["label"].startswith("H+R+RBI over 1.5")),
-                    rows[0])
-    subset = merged.dropna(subset=[headline["prediction_col"]])
-    actual_col = ("_actual_over_1.5" if headline["label"].startswith("H+R+RBI")
-                  else BINARY_PROPS[headline["prediction_col"]][0])
-    if actual_col in subset:
-        boot = bootstrap_brier_skill(subset[actual_col],
-                                     subset[headline["prediction_col"]])
-        print(f"\n  {headline['label']}: Brier skill {boot['point']:+.4f}, "
-              f"95% CI [{boot['ci_low']:+.4f}, {boot['ci_high']:+.4f}]")
-        print("  On one slate that interval will be wide. That is expected and")
-        print("  is exactly why the running total below is the number to read.")
+    # Everything below reports the CLEAN rows when there are enough of them,
+    # because these are the numbers that describe the model rather than the
+    # clock. `basis` names which, so the printout can never be mistaken.
+    basis = clean_frame if len(clean_frame) >= 30 else merged
+    basis_name = "clean rows" if basis is clean_frame else "all rows"
+    rows_basis = rows_clean if basis is clean_frame else rows
+
+    headline = next((r for r in rows_basis
+                     if r["label"].startswith("H+R+RBI over 1.5")),
+                    rows_basis[0] if rows_basis else None)
+    if headline is not None:
+        # Rebuild the outcome column here rather than reaching for one left
+        # behind by the scoring loop. The old code looked for
+        # "_actual_over_1.5" while the loop wrote "_actual_hrr_over_1.5", so
+        # the `in subset` test was always False and this whole block quietly
+        # printed nothing -- a missing confidence interval reads as "not
+        # implemented yet", not as "bug".
+        prediction_col = headline["prediction_col"]
+        work = basis.dropna(subset=[prediction_col]).copy()
+        if headline["label"].startswith("H+R+RBI") and "hrr" in work.columns:
+            truth = (work["hrr"] > 1.5).astype(int)
+        elif prediction_col in BINARY_PROPS and BINARY_PROPS[prediction_col][0] in work:
+            truth = work[BINARY_PROPS[prediction_col][0]]
+        else:
+            truth = None
+        if truth is not None and truth.nunique() > 1:
+            boot = bootstrap_brier_skill(truth, work[prediction_col])
+            print(f"\n  {headline['label']} ({basis_name}, n={len(work)}): "
+                  f"Brier skill {boot['point']:+.4f}, "
+                  f"95% CI [{boot['ci_low']:+.4f}, {boot['ci_high']:+.4f}]")
+            print("  On one slate that interval will be wide. That is expected and")
+            print("  is exactly why the running total below is the number to read.")
 
     # ---- Calibration --------------------------------------------------
-    if "prob_hr" in merged and "got_hr" in merged:
-        print("\n--- Home run reliability (did the printed % match reality?) ---")
-        relia = reliability_by_quantile(merged["got_hr"], merged["prob_hr"], n_bins=4)
+    if "prob_hr" in basis and "got_hr" in basis:
+        print(f"\n--- Home run reliability, {basis_name} "
+              f"(did the printed % match reality?) ---")
+        relia = reliability_by_quantile(basis["got_hr"], basis["prob_hr"], n_bins=4)
         print(relia.to_string(index=False, float_format=lambda v: f"{v:.3f}"))
 
     # ---- Append to the running log ------------------------------------
+    # Both sets of numbers are kept. The unprefixed columns stay exactly as
+    # they were -- every hitter scored -- so rows written by the old version
+    # remain meaningful. The clean_* columns are the ones the dashboard
+    # reads, and are NaN on a night with too few pre-game rows to score.
     log_path = cache_path(SCORING_LOG_KEY)
     entry = table.copy()
     entry.insert(0, "game_date", game_date)
+    clean_cols = table_clean.rename(
+        columns={c: f"clean_{c}" for c in COLS if c != "label"})
+    entry = entry.merge(clean_cols, on="label", how="left")
     if os.path.exists(log_path):
         previous = pd.read_csv(log_path)
         previous = previous[previous["game_date"] != game_date]  # allow re-scoring
@@ -316,17 +431,45 @@ def main(game_date: str = None):
     print("\n" + "=" * 72)
     print(f"RUNNING TOTAL across {log['game_date'].nunique()} scored slate(s)")
     print("=" * 72)
-    running = log.groupby("label").apply(
-        lambda g: pd.Series({
-            "slates": g["game_date"].nunique(),
-            "n": g["n"].sum(),
-            # Weight by sample size: a 269-hitter slate should not count
-            # the same as a rained-out 80-hitter one.
-            "auc": np.average(g["auc"], weights=g["n"]),
-            "brier_skill": np.average(g["brier_skill"], weights=g["n"]),
-        })
-    ).reset_index()
-    print(running.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+    # The running total is the clean rows only. A slate that was entirely
+    # re-run after first pitch contributes nothing to it -- which is the
+    # point, and is different from the slate being deleted: its full-slate
+    # numbers are still in the log and still readable.
+    #
+    # Rows written before clean_* existed have no clean columns at all; for
+    # those, fall back to the unprefixed values rather than dropping the
+    # slate. Their predictions predate the merge-on-rerun change, so the
+    # distinction did not exist to be recorded.
+    for col in ("clean_n", "clean_auc", "clean_brier_skill"):
+        if col not in log.columns:
+            log[col] = np.nan
+    usable = log.copy()
+    for col in ("n", "auc", "brier_skill"):
+        usable[f"clean_{col}"] = usable[f"clean_{col}"].fillna(usable[col])
+    usable = usable[usable["clean_n"].fillna(0) > 0]
+
+    def _weighted(g, value_col, weight_col):
+        w = g[weight_col].to_numpy(dtype=float)
+        if w.sum() <= 0:
+            return float("nan")
+        return float(np.average(g[value_col].to_numpy(dtype=float), weights=w))
+
+    if usable.empty:
+        print("  No clean rows on any scored slate yet -- nothing to total.")
+    else:
+        running = usable.groupby("label").apply(
+            lambda g: pd.Series({
+                "slates": g["game_date"].nunique(),
+                # Weight by sample size: a 269-hitter slate should not count
+                # the same as a rained-out 80-hitter one.
+                "n": g["clean_n"].sum(),
+                "auc": _weighted(g, "clean_auc", "clean_n"),
+                "brier_skill": _weighted(g, "clean_brier_skill", "clean_n"),
+            })
+        ).reset_index()
+        print(running.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+        print("\n  Clean rows only -- hitters whose prediction was written")
+        print("  before their own game started.")
 
     if log["game_date"].nunique() < 5:
         print(f"\n  Only {log['game_date'].nunique()} slate(s) scored. Treat all of")
