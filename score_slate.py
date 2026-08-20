@@ -440,11 +440,12 @@ def main(game_date: str = None):
     # those, fall back to the unprefixed values rather than dropping the
     # slate. Their predictions predate the merge-on-rerun change, so the
     # distinction did not exist to be recorded.
-    for col in ("clean_n", "clean_auc", "clean_brier_skill"):
-        if col not in log.columns:
-            log[col] = np.nan
+    POOLED = ("n", "base_rate", "auc", "brier", "brier_skill")
+    for col in POOLED:
+        if f"clean_{col}" not in log.columns:
+            log[f"clean_{col}"] = np.nan
     usable = log.copy()
-    for col in ("n", "auc", "brier_skill"):
+    for col in POOLED:
         usable[f"clean_{col}"] = usable[f"clean_{col}"].fillna(usable[col])
     usable = usable[usable["clean_n"].fillna(0) > 0]
 
@@ -457,16 +458,33 @@ def main(game_date: str = None):
     if usable.empty:
         print("  No clean rows on any scored slate yet -- nothing to total.")
     else:
-        running = usable.groupby("label").apply(
-            lambda g: pd.Series({
+        def _pool(g):
+            # Pool the BRIER SCORES and recompute skill from them, rather
+            # than averaging the per-slate skills.
+            #
+            # Skill is 1 - brier/(p(1-p)), and the average of a ratio is not
+            # the ratio of the averages: each slate divides by its own base
+            # rate, so averaging the results silently weights slates by how
+            # extreme their base rate happened to be. The dashboard has
+            # always pooled correctly, which is why it read +1.79% for home
+            # runs while this printed +1.65% -- one quantity, two answers,
+            # and no way to tell which to trust.
+            #
+            # Weight by sample size throughout: a 270-hitter slate should
+            # not count the same as a rained-out 80-hitter one.
+            base = _weighted(g, "clean_base_rate", "clean_n")
+            brier = _weighted(g, "clean_brier", "clean_n")
+            ref = base * (1.0 - base)
+            return pd.Series({
                 "slates": g["game_date"].nunique(),
-                # Weight by sample size: a 269-hitter slate should not count
-                # the same as a rained-out 80-hitter one.
                 "n": g["clean_n"].sum(),
+                # AUC has no closed-form pooling without the raw outcomes,
+                # so this stays a weighted mean and is approximate.
                 "auc": _weighted(g, "clean_auc", "clean_n"),
-                "brier_skill": _weighted(g, "clean_brier_skill", "clean_n"),
+                "brier_skill": (1.0 - brier / ref) if ref > 0 else float("nan"),
             })
-        ).reset_index()
+
+        running = usable.groupby("label").apply(_pool).reset_index()
         print(running.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
         print("\n  Clean rows only -- hitters whose prediction was written")
         print("  before their own game started.")
