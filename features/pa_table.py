@@ -56,6 +56,8 @@ slot indirectly. Real lineup data would be a genuine upgrade.
 import numpy as np
 import pandas as pd
 
+from data.game_filter import regular_season_only
+
 HIT_EVENTS = {"single", "double", "triple", "home_run"}
 # Hit-by-pitch is grouped with walks throughout: for the props people
 # actually bet, "reached base without swinging the bat" is one category,
@@ -103,6 +105,27 @@ def build_pa_table(statcast_df: pd.DataFrame) -> pd.DataFrame:
     """
     df = statcast_df.copy()
     df["game_date"] = pd.to_datetime(df["game_date"])
+
+    # Spring training and postseason out, before anything is counted.
+    #
+    # Roughly 11% of every cached pull is not regular-season baseball, and
+    # nothing in this project looked at `game_type` until 2026-08-30. On a
+    # season-long average the correction is small -- home run rate moves
+    # 0.85% -- but spring is concentrated in February and March, so a
+    # trailing 150-PA window in April is substantially made of pitchers
+    # building arm strength against minor-league hitters. See
+    # data/game_filter.py for the measured numbers.
+    # verbose, because a correctness filter that runs silently is a
+    # correctness filter nobody believes is running. It drops ~10.5% of a
+    # typical pull and that number should be on screen, not inferred.
+    df = regular_season_only(df, verbose=True, label="the Statcast pull")
+    if df.empty:
+        raise ValueError(
+            "No regular-season rows in this pull. If the cache genuinely "
+            "holds only spring training, widen the date range; if it has "
+            "no game_type column at all, regular_season_only would have "
+            "passed it through, so this is something else."
+        )
 
     # The resolving pitch of each plate appearance.
     pa = df[df["events"].notna()].copy()

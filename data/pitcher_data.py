@@ -78,6 +78,7 @@ import numpy as np
 import pandas as pd
 
 from data.cache import cache_path, load_cached, save_cache
+from data.game_filter import regular_season_only
 from data.refresh import checked_today, mark_checked
 from features.rate_features import estimate_prior_strength, shrink
 
@@ -170,6 +171,14 @@ def pitcher_pa_table(raw: pd.DataFrame) -> pd.DataFrame:
     """One row per plate appearance faced, with outcome flags and the
     batter's handedness."""
     if raw.empty or "events" not in raw.columns:
+        return pd.DataFrame()
+
+    # Spring training and postseason are a different sport for a pitcher's
+    # rates -- March is arm-building against minor leaguers, October is the
+    # best hitters alive. Measured on the pitcher caches, non-regular
+    # plate appearances strike out 7% more often than regular ones.
+    raw = regular_season_only(raw)
+    if raw.empty:
         return pd.DataFrame()
 
     pa = raw[raw["events"].notna()].copy()

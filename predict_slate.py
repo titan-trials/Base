@@ -431,8 +431,13 @@ def main(game_date: str = None):
         counts = frame["form_state"].value_counts()
         hot, cold = int(counts.get("Hot", 0)), int(counts.get("Cold", 0))
         unknown = int(counts.get("Unknown", 0))
-        print(f"  Form marker: {hot} hot, {cold} cold, "
-              f"{len(frame) - hot - cold - unknown} normal, {unknown} unknown.")
+        # "computed" and not "written": on a re-run, preservation keeps the
+        # rows for games already underway, so most of what is counted here
+        # never reaches the file. Reporting it as though it did made a
+        # 3-game refresh look like a 252-hitter one.
+        print(f"  Form marker computed for {len(frame)} hitters: {hot} hot, "
+              f"{cold} cold, {len(frame) - hot - cold - unknown} normal, "
+              f"{unknown} unknown.")
         # About a dozen of these are expected from noise alone on a
         # 270-hitter slate -- the threshold was set from a simulation of
         # players whose true rates never move. A night with 60 flagged is
@@ -738,6 +743,17 @@ def main(game_date: str = None):
     path = cache_path(f"slate_{game_date}")
     out.to_csv(path, index=False)
     print(f"\nSaved {len(out)} predictions to cache/slate_{game_date}.csv")
+
+    # What is actually IN the file, after preservation. On a re-run this is
+    # the number that matters, and it will usually be smaller than the
+    # count printed while the rows were being computed.
+    if "form_state" in out.columns:
+        have = out["form_state"].notna().sum()
+        w = out["form_state"].value_counts()
+        print(f"  Of those, {have} carry a form marker "
+              f"({int(w.get('Hot', 0))} hot, {int(w.get('Cold', 0))} cold). "
+              f"Rows preserved from an earlier run predate the marker and "
+              f"carry none.")
 
     print("\nHighest home-run probabilities on the slate:")
     top = out.nlargest(10, "prob_hr")[
