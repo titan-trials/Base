@@ -86,6 +86,12 @@ ENV/
 Thumbs.db
 desktop.ini
 
+# --- Secrets ---------------------------------------------------------
+# The Odds API key. Git history is forever and this repo is public, so a
+# key committed once has to be rotated, not deleted. Prefer the
+# ODDS_API_KEY environment variable; this file is the simpler fallback.
+.odds_api_key
+
 # --- Streamlit -------------------------------------------------------
 # secrets.toml can hold credentials. config.toml is fine to commit if you
 # want the deployed theme to match local.

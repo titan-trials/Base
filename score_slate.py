@@ -285,18 +285,37 @@ def score_pitchers(game_date: str):
 
     merged[CLEAN_COL] = clean_mask(merged)
     n_clean = int(merged[CLEAN_COL].sum())
-    if n_clean and n_clean < len(merged):
-        print(f"  {n_clean} of {len(merged)} written before their own first "
-              f"pitch. The running total uses those.")
-    basis = merged[merged[CLEAN_COL]] if n_clean >= 5 else merged
-    basis_name = "clean" if basis is not merged else "all"
 
-    print(f"\n  Batters faced: predicted {basis['expected_bf'].mean():.2f}, "
-          f"actual {basis['batters_faced'].mean():.2f} "
-          f"({basis['expected_bf'].mean() - basis['batters_faced'].mean():+.2f})")
-    print(f"  Strikeouts:    predicted {basis['expected_k'].mean():.2f}, "
-          f"actual {basis['strikeouts'].mean():.2f} "
-          f"({basis['expected_k'].mean() - basis['strikeouts'].mean():+.2f})")
+    # Clean rows ONLY reach the log. An earlier version of this fell back
+    # to scoring every starter when fewer than five were clean, which
+    # would have opened the pitcher record with 26 hindsight rows from
+    # 2026-08-30 -- the same mistake the hitter scorer was fixed for that
+    # morning, reintroduced on the other side of the model.
+    #
+    # A slate with two clean starters logs two rows. That is not a
+    # problem: the running total weights by n, so two rows contribute
+    # about as much as two rows should.
+    def _summary(frame, label):
+        print(f"\n  {label} ({len(frame)} starters)")
+        print(f"    Batters faced: predicted {frame['expected_bf'].mean():.2f}, "
+              f"actual {frame['batters_faced'].mean():.2f} "
+              f"({frame['expected_bf'].mean() - frame['batters_faced'].mean():+.2f})")
+        print(f"    Strikeouts:    predicted {frame['expected_k'].mean():.2f}, "
+              f"actual {frame['strikeouts'].mean():.2f} "
+              f"({frame['expected_k'].mean() - frame['strikeouts'].mean():+.2f})")
+
+    if n_clean < len(merged):
+        _summary(merged, "Every starter, including games already underway")
+    if n_clean == 0:
+        print("\n  No starter was predicted before his own game began, so "
+              "nothing here is evidence.")
+        print("  Reported above, not logged. Run the predictor earlier in "
+              "the day and this fills in.")
+        return None
+
+    basis = merged[merged[CLEAN_COL]]
+    basis_name = "clean"
+    _summary(basis, "Predicted before first pitch -- the ones that count")
 
     rows = []
     for line in K_LINES:

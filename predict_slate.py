@@ -58,7 +58,7 @@ from data.roster import build_slate_hitters
 from data.refresh import refresh_players, data_age_days, needs_refresh
 from data.pitcher_data import (
     build_pitcher_rates, pitcher_hand, measure_bullpen_rates,
-    load_starter_history,
+    measure_team_bullpen_rates, load_starter_history,
     blend_with_bullpen,
 )
 from data.lineup_slots import get_lineup_slots, attach_lineup_slots
@@ -451,7 +451,8 @@ def main(game_date: str = None):
     # this pool rather than assumed.
     starter_share, bullpen_rates = measure_bullpen_rates(pa)
     print(f"  Bullpen exposure: starter throws {starter_share:.1%} of a "
-          f"hitter's plate appearances; the rest use league reliever rates.")
+          f"hitter's plate appearances.")
+    team_bullpen = measure_team_bullpen_rates(pa, bullpen_rates)
 
     if USE_REAL_PITCHER_DATA and not starters.empty:
         pitcher_rates_real = build_pitcher_rates(
@@ -460,7 +461,7 @@ def main(game_date: str = None):
             names=dict(zip(starters["pid"].astype(int), starters["pname"])),
         ).set_index("pitcher")
 
-    rows = []
+    rows, matched_bullpen = [], 0
     for hitter in hitters.itertuples():
         if hitter.player_id not in latest.index:
             continue
@@ -477,6 +478,15 @@ def main(game_date: str = None):
         batter_stand = row.get("stand", "R")
         row["platoon_edge"] = int(batter_stand != p_throws)
 
+        # The bullpen he will actually face, not the league's. `opponent`
+        # is the pitching side. A team missing from the table -- an
+        # abbreviation that does not match Statcast's, most likely --
+        # falls back to league rather than failing, and the count of how
+        # many matched is printed below so a naming mismatch shows up as a
+        # number instead of as silently average bullpens everywhere.
+        pen = team_bullpen.get(getattr(hitter, "opponent", None), bullpen_rates)
+        matched_bullpen += int(pen is not bullpen_rates)
+
         for target in RATE_TARGETS:
             allowed_col = f"pit_{target}_allowed"
             if has_real:
@@ -490,14 +500,14 @@ def main(game_date: str = None):
                     split_col, pitcher_rates_real.loc[pid][allowed_col]))
                 # Weight by how much of the game he actually pitches.
                 allowed = blend_with_bullpen(
-                    unblended, bullpen_rates.get(target, league[target]),
+                    unblended, pen.get(target, league[target]),
                     starter_share)
             elif (pid is not None and target in pitcher_rates
                     and pid in pitcher_rates[target].index):
                 unblended = float(pitcher_rates[target].loc[pid])
                 allowed = blend_with_bullpen(
                     unblended,
-                    bullpen_rates.get(target, league[target]), starter_share)
+                    pen.get(target, league[target]), starter_share)
             else:
                 unblended = league[target]
                 # No starter named (TBD). The whole game is effectively
@@ -545,6 +555,10 @@ def main(game_date: str = None):
         return
     frame = frame.dropna(subset=needed).reset_index(drop=True)
     print(f"  {len(frame)} hitters have enough history to score.")
+    if team_bullpen:
+        print(f"  Team bullpen rates matched for {matched_bullpen} of "
+              f"{len(hitters)} hitters"
+              f"{' -- check team abbreviations' if matched_bullpen < 0.8 * len(hitters) else ''}.")
 
     if "form_state" in frame.columns:
         counts = frame["form_state"].value_counts()

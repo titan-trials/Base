@@ -422,6 +422,89 @@ def measure_bullpen_rates(pa_table: pd.DataFrame) -> tuple:
     return share, rates
 
 
+def measure_team_bullpen_rates(pa_table: pd.DataFrame, league_rates: dict,
+                               verbose: bool = True) -> dict:
+    """
+    Per-team bullpen rates, shrunk toward the league.
+
+    WHY THIS EXISTS
+    ---------------
+    Every bullpen in this project got the same league-average reliever
+    rates, and roughly 41% of a hitter's plate appearances are against one.
+    Measured on 43,651 regular-season bullpen plate appearances from 2025
+    onward, the spread is not small:
+
+        strikeout rate   0.171 (COL)  to  0.257 (TB)     sd 0.0179
+        home run rate    0.021 (CLE)  to  0.046 (ATL)    sd 0.0067
+        walk rate        0.080 (SEA)  to  0.122 (ATH)    sd 0.0098
+
+    Subtracting the binomial noise at ~1,400 plate appearances per team
+    leaves a true strikeout spread of about 0.0142 -- so roughly 80% of
+    what is visible is real difference between bullpens rather than
+    sampling. Giving Tampa Bay's pen and Colorado's pen the same number
+    is throwing away a genuinely large effect.
+
+    Deliberately a SEPARATE function from measure_bullpen_rates rather
+    than a third return value: three callers unpack that one as a pair,
+    and widening it to break them would be a poor trade for a function
+    that answers a different question anyway.
+
+    Returns {team: {target: rate}}. Teams with too little history simply
+    do not appear, and the caller falls back to league.
+    """
+    needed = {"game_pk", "pitcher", "is_home", "inning", "home_team", "away_team"}
+    missing = needed - set(pa_table.columns)
+    if missing:
+        if verbose:
+            print(f"    Team bullpens: need {sorted(missing)} on the PA "
+                  f"table -- every bullpen gets the league rate.")
+        return {}
+
+    df = pa_table.copy()
+    starters = (df[df["inning"] == 1]
+                .groupby(["game_pk", "is_home"])["pitcher"].first()
+                .rename("starter_id"))
+    df = df.join(starters, on=["game_pk", "is_home"])
+    df = df[df["starter_id"].notna()]
+    if df.empty:
+        return {}
+
+    # The PITCHING team is the other one. A home batter faces the away
+    # team's pitchers, which is exactly why away_team had to be carried
+    # onto the PA table.
+    df["pitching_team"] = np.where(df["is_home"] == 1,
+                                   df["away_team"], df["home_team"])
+    pen = df[(df["pitcher"] != df["starter_id"])
+             & (df["pitching_team"] != "UNK")]
+    if pen.empty:
+        return {}
+
+    out = {}
+    for target in PITCHER_TARGETS:
+        if target not in pen.columns:
+            continue
+        totals = pen.groupby("pitching_team")[target].agg(["sum", "size"])
+        # Shrinkage strength estimated from the population, same
+        # beta-binomial method of moments used everywhere else. A team
+        # whose pen is genuinely different keeps that difference; one with
+        # 300 plate appearances of noise gets pulled back to league.
+        k = estimate_prior_strength(totals["sum"], totals["size"])
+        prior = float(league_rates.get(target, pen[target].mean()))
+        shrunk = shrink(totals["sum"], totals["size"], prior, k)
+        for team, rate in zip(totals.index, shrunk):
+            out.setdefault(team, {})[target] = float(rate)
+
+    if verbose and out:
+        ks = sorted((v.get("is_k", float("nan")), t) for t, v in out.items()
+                    if "is_k" in v)
+        if ks:
+            print(f"    Team bullpens: {len(out)} teams from "
+                  f"{len(pen):,} relief plate appearances. Strikeout rate "
+                  f"{ks[0][0]:.3f} ({ks[0][1]}) to {ks[-1][0]:.3f} "
+                  f"({ks[-1][1]}), league {league_rates.get('is_k', 0):.3f}.")
+    return out
+
+
 def blend_with_bullpen(starter_rate: float, bullpen_rate: float,
                        starter_share: float = STARTER_PA_SHARE) -> float:
     """

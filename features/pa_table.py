@@ -79,7 +79,10 @@ PA_COLUMNS = [
     "batter", "pitcher", "game_pk", "game_date",
     "is_hr", "is_hit", "is_walk", "is_k", "rbi",
     "reached", "reached_nonhr", "hrr_certain", "total_bases",
-    "stand", "p_throws", "home_team", "is_home", "platoon_edge",
+    # away_team joins home_team so the PITCHING side of a plate appearance
+    # is recoverable. With only home_team, a home batter's opponent is
+    # unknowable, and team-level bullpen rates cannot be measured at all.
+    "stand", "p_throws", "home_team", "away_team", "is_home", "platoon_edge",
     # Needed to tell a starting pitcher from a reliever. `inning` gives the
     # definition (whoever pitched in the first) and `at_bat_number` gives
     # the ordering. Both were dropped here for several versions, which left
@@ -199,7 +202,8 @@ def build_pa_table(statcast_df: pd.DataFrame) -> pd.DataFrame:
     else:
         pa["is_home"] = 0
 
-    for col, default in [("stand", "R"), ("p_throws", "R"), ("home_team", "UNK")]:
+    for col, default in [("stand", "R"), ("p_throws", "R"),
+                         ("home_team", "UNK"), ("away_team", "UNK")]:
         if col not in pa.columns:
             pa[col] = default
         pa[col] = pa[col].fillna(default)
