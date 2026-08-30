@@ -32,6 +32,27 @@ cache/*
 # while the local file had 2026-08-18 in it all along.
 !cache/scoring_log.csv
 
+# THE RULE THIS KEEPS RE-LEARNING: anything the dashboard READS, or any
+# record that ACCUMULATES, has to be tracked. Everything else in cache/ is
+# regenerable; these are not.
+#
+# It has now bitten twice. The Results tab said "No slates scored yet" for
+# a day while scoring_log.csv sat populated on disk, and the Pitchers tab
+# was about to do the same thing. In both cases the code was correct, the
+# data existed, and the deployed app was telling the truth about what it
+# could see.
+
+# Read by the Pitchers tab. One row per starter per slate, ~5 KB a night.
+!cache/pitchers_*.csv
+
+# Accumulating records. Neither is regenerable: rescoring an old date needs
+# that date's prediction file AND the Statcast pull behind it, and the
+# whole value is that they add one honest out-of-sample row per night.
+#   form_log.csv            does the hot/cold marker predict anything
+#   pitcher_scoring_log.csv how the strikeout model is actually doing
+!cache/form_log.csv
+!cache/pitcher_scoring_log.csv
+
 # Regenerable, and the expensive part of the repo:
 #   statcast_player_*.csv    ~1.2 GB, re-pulled by predict_slate.py
 #   statcast_pitcher_*.csv   re-pulled per slate, ~30 starters at a time
