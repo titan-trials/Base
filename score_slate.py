@@ -58,6 +58,7 @@ from data.cache import cache_path
 from data.refresh import refresh_players
 from features.pa_table import build_pa_table, build_game_totals
 from data.batting_lines import get_batting_lines
+from data.pitching_lines import get_pitching_lines
 from features.run_features import build_run_training_frame
 from model.hr_v4 import evaluate, bootstrap_brier_skill, reliability_by_quantile
 
@@ -228,6 +229,145 @@ def score_frame(frame) -> list:
 
 
 FORM_LOG_KEY = "form_log"
+PITCHER_LOG_KEY = "pitcher_scoring_log"
+K_LINES = (5.5, 6.5)
+
+
+def score_pitchers(game_date: str):
+    """
+    Grade last night's starter strikeout props.
+
+    Separate from the hitter scorer because the units are different -- one
+    row per starter rather than per hitter, so about fifteen rows a slate
+    against 250. That matters for how the results are read: a single
+    slate's Brier skill on fifteen starters is almost pure noise, and only
+    the running total is worth anything.
+
+    Batters faced is graded alongside strikeouts on purpose. It is half the
+    model and the half more likely to be wrong, and during the build a
+    1.50-batter error in it sat hidden behind a 6% error in the strikeout
+    rate running the other way. Two numbers that can each be checked beat
+    one number that can only be checked jointly.
+    """
+    path = cache_path(f"pitchers_{game_date}")
+    if not os.path.exists(path):
+        return None
+    props = pd.read_csv(path)
+    if props.empty or "prob_k_over_5.5" not in props.columns:
+        return None
+
+    print("\n" + "=" * 72)
+    print(f"PITCHER STRIKEOUTS -- {game_date}")
+    print("=" * 72)
+
+    lines = get_pitching_lines(props["game_pk"].unique(),
+                               refetch=props["game_pk"].unique())
+    if lines.empty:
+        print("  No official pitching lines available yet. Try again later.")
+        return None
+
+    merged = props.merge(
+        lines[lines["is_starter"] == 1][
+            ["game_pk", "pitcher_id", "batters_faced", "strikeouts",
+             "innings_pitched"]],
+        on=["game_pk", "pitcher_id"], how="inner")
+
+    dropped = len(props) - len(merged)
+    if dropped:
+        # A projected starter who was scratched, or an opener the official
+        # line disagrees with. Excluded rather than counted as a miss --
+        # the model predicted "if he starts".
+        print(f"  {dropped} of {len(props)} projected starters did not "
+              f"actually start. Excluded, not counted as misses.")
+    if merged.empty:
+        print("  None of the projected starters started. Nothing to score.")
+        return None
+
+    merged[CLEAN_COL] = clean_mask(merged)
+    n_clean = int(merged[CLEAN_COL].sum())
+    if n_clean and n_clean < len(merged):
+        print(f"  {n_clean} of {len(merged)} written before their own first "
+              f"pitch. The running total uses those.")
+    basis = merged[merged[CLEAN_COL]] if n_clean >= 5 else merged
+    basis_name = "clean" if basis is not merged else "all"
+
+    print(f"\n  Batters faced: predicted {basis['expected_bf'].mean():.2f}, "
+          f"actual {basis['batters_faced'].mean():.2f} "
+          f"({basis['expected_bf'].mean() - basis['batters_faced'].mean():+.2f})")
+    print(f"  Strikeouts:    predicted {basis['expected_k'].mean():.2f}, "
+          f"actual {basis['strikeouts'].mean():.2f} "
+          f"({basis['expected_k'].mean() - basis['strikeouts'].mean():+.2f})")
+
+    rows = []
+    for line in K_LINES:
+        col = f"prob_k_over_{line}"
+        if col not in basis.columns:
+            continue
+        truth = (basis["strikeouts"] > line).astype(int)
+        said = float(basis[col].mean())
+        did = float(truth.mean())
+        brier = float(((basis[col] - truth) ** 2).mean())
+        ref = did * (1.0 - did)
+        rows.append({
+            "game_date": game_date, "line": line, "n": len(basis),
+            "basis": basis_name, "mean_pred": said, "base_rate": did,
+            "brier": brier,
+            "brier_skill": 1.0 - brier / ref if ref > 0 else float("nan"),
+            "pred_bf": float(basis["expected_bf"].mean()),
+            "actual_bf": float(basis["batters_faced"].mean()),
+            "pred_k": float(basis["expected_k"].mean()),
+            "actual_k": float(basis["strikeouts"].mean()),
+        })
+    if not rows:
+        return None
+
+    entry = pd.DataFrame(rows)
+    print()
+    print(entry[["line", "n", "mean_pred", "base_rate", "brier_skill"]]
+          .to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+    print("\n  On fifteen starters a single night's skill is almost all "
+          "noise.")
+    print("  The running total below is the number that means something.")
+
+    log_path = cache_path(PITCHER_LOG_KEY)
+    if os.path.exists(log_path):
+        previous = pd.read_csv(log_path)
+        previous = previous[previous["game_date"] != game_date]
+        log = pd.concat([previous, entry], ignore_index=True)
+    else:
+        log = entry
+    log.to_csv(log_path, index=False)
+
+    print("\n" + "-" * 72)
+    print(f"RUNNING TOTAL across {log['game_date'].nunique()} slate(s)")
+    print("-" * 72)
+
+    def _pool(g):
+        w = g["n"].to_numpy(dtype=float)
+        base = float(np.average(g["base_rate"], weights=w))
+        brier = float(np.average(g["brier"], weights=w))
+        ref = base * (1.0 - base)
+        return pd.Series({
+            "slates": g["game_date"].nunique(), "n": int(w.sum()),
+            "said": float(np.average(g["mean_pred"], weights=w)),
+            "did": base,
+            # Pooled, not an average of per-slate skills -- see the note in
+            # the hitter running total for why those differ.
+            "brier_skill": 1.0 - brier / ref if ref > 0 else float("nan"),
+            "pred_bf": float(np.average(g["pred_bf"], weights=w)),
+            "actual_bf": float(np.average(g["actual_bf"], weights=w)),
+        })
+
+    running = log.groupby("line")[
+        ["n", "base_rate", "brier", "mean_pred", "pred_bf", "actual_bf",
+         "game_date"]].apply(_pool).reset_index()
+    print(running.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+    print(f"\n  Backtest on 1,101 held-out starts gave +0.0635 (over 5.5) "
+          f"and +0.0765 (over 6.5).")
+    print(f"  If live settles well below that, the backtest was optimistic "
+          f"and it is worth knowing.")
+    print(f"\n  Log: cache/{PITCHER_LOG_KEY}.csv")
+    return running
 
 
 def score_form_marker(frame, game_date: str):
@@ -702,6 +842,11 @@ def main(game_date: str = None):
     # prediction made after the game started is not a forecast the marker
     # can be credited or blamed for.
     score_form_marker(basis, game_date)
+
+    # Starters are graded from their own file and their own log --
+    # fifteen rows against 250, so mixing them into the hitter totals
+    # would let a noisy handful move a number built from hundreds.
+    score_pitchers(game_date)
 
     print(f"\n  Log: cache/{SCORING_LOG_KEY}.csv")
 

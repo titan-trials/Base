@@ -193,6 +193,36 @@ def pitcher_pa_table(raw: pd.DataFrame) -> pd.DataFrame:
     return pa
 
 
+def load_starter_history(pitcher_ids, verbose: bool = True) -> pd.DataFrame:
+    """
+    Every cached plate appearance for these pitchers, concatenated.
+
+    Reads the caches ONLY -- no refresh, no network. build_pitcher_rates
+    has already brought them up to date earlier in the same run, and
+    refreshing again here would double the pulls for nothing.
+
+    build_pitcher_rates builds exactly this per-pitcher table internally
+    and then throws it away, keeping only the aggregate rates. The
+    workload model needs the rows themselves, because how many batters a
+    start lasted is not recoverable from a rate.
+    """
+    frames = []
+    for pitcher_id in [int(p) for p in pd.Series(list(pitcher_ids)).dropna().unique()]:
+        raw = load_pitcher_cache(pitcher_id)
+        if raw.empty:
+            continue
+        table = pitcher_pa_table(raw)
+        if not table.empty:
+            frames.append(table)
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    if verbose:
+        print(f"  Starter history: {len(out):,} plate appearances from "
+              f"{out['pitcher'].nunique()} pitchers (cache only).")
+    return out
+
+
 def build_pitcher_rates(pitcher_ids, start_date: str, end_date: str,
                         league_rates: dict, names=None,
                         max_age_days: int = 0, verbose: bool = True) -> pd.DataFrame:

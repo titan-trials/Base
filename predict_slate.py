@@ -58,6 +58,7 @@ from data.roster import build_slate_hitters
 from data.refresh import refresh_players, data_age_days, needs_refresh
 from data.pitcher_data import (
     build_pitcher_rates, pitcher_hand, measure_bullpen_rates,
+    load_starter_history,
     blend_with_bullpen,
 )
 from data.lineup_slots import get_lineup_slots, attach_lineup_slots
@@ -68,6 +69,9 @@ from features.rate_features import (
     rate_feature_cols, RATE_TARGETS, log5,
 )
 from features.form_features import add_form_deviation
+from features.pitcher_workload import (
+    identify_starts, WorkloadModel, k_count_distribution, prob_over,
+)
 from features.rbi_features import (
     add_base_state, add_lineup_obp_context, train_runner_model,
     train_rbi_model, predict_rbi_per_pa,
@@ -100,6 +104,98 @@ MAX_DATA_AGE_DAYS = 0   # 0 = re-check once per calendar day
 # so the library grows a slate at a time rather than needing a bulk pull.
 USE_REAL_PITCHER_DATA = True
 SHAPE_METHOD = "frequency"   # chosen by select_tilt_method on the backtest
+
+
+K_LINES = (5.5, 6.5)
+
+
+def build_pitcher_props(frame, starters, game_date):
+    """
+    Strikeout probabilities for tonight's starters.
+
+    The hitter model compounds a per-plate-appearance probability over a
+    distribution of plate appearances. This is the same arithmetic with
+    the roles swapped: a per-BATTER-FACED strikeout probability compounded
+    over a distribution of batters faced.
+
+    The difference that earns its keep: a hitter's plate appearances are
+    all against roughly one pitcher, but a starter works through nine
+    different hitters and then meets them again. Batter faced number n is
+    lineup slot n mod 9, and with a confirmed lineup that is a known
+    person rather than an average. The compounding walks the real order.
+
+    Written to its own file. The slate file is one row per hitter and a
+    pitcher is not a hitter; bolting nine mostly-empty columns onto every
+    batter row to carry fourteen pitchers would be worse than a second
+    table.
+    """
+    if starters is None or starters.empty:
+        return pd.DataFrame()
+    if "p_is_k_vs_starter" not in frame.columns:
+        print("  (no starter-only strikeout rate -- skipping pitcher props)")
+        return pd.DataFrame()
+
+    print("\nPitcher strikeouts...")
+    history = load_starter_history(starters["pid"].astype(int).tolist())
+    if history.empty:
+        print("  No cached pitcher history. Skipping.")
+        return pd.DataFrame()
+
+    all_starts = identify_starts(history)
+    try:
+        workload = WorkloadModel.fit(all_starts, as_of=pd.Timestamp(game_date))
+    except ValueError as exc:
+        print(f"  Could not fit the workload model: {exc}")
+        return pd.DataFrame()
+
+    rows = []
+    for s in starters.itertuples():
+        pid = int(s.pid)
+        # The lineup he faces, in batting order. `opposing_pitcher_id` is
+        # the hitter's view of tonight, so this is exactly his opponents.
+        lineup = frame[frame["opposing_pitcher_id"] == pid]
+        if lineup.empty:
+            continue
+        lineup = lineup.sort_values("lineup_slot", na_position="last")
+        p_by_batter = lineup["p_is_k_vs_starter"].to_numpy(dtype=float)
+        if not np.isfinite(p_by_batter).all() or len(p_by_batter) == 0:
+            continue
+
+        support, bf_probs = workload.bf_pmf(pid)
+        dist = k_count_distribution(p_by_batter, support, bf_probs)
+        expected = float((np.arange(len(dist)) * dist).sum())
+        row = {
+            "game_pk": int(lineup["game_pk"].iloc[0]),
+            "pitcher_id": pid,
+            "pitcher": s.pname,
+            "team": lineup["opponent"].iloc[0],
+            "opponent": lineup["team"].iloc[0],
+            "expected_bf": workload.expected_bf(pid),
+            "starts_seen": workload.starts_seen(pid),
+            "k_rate": workload.k_rate(pid),
+            "expected_k": expected,
+            "lineup_faced": len(lineup),
+        }
+        for line in K_LINES:
+            row[f"prob_k_over_{line}"] = prob_over(dist, line)
+        rows.append(row)
+
+    if not rows:
+        print("  No starter had a usable lineup. Skipping.")
+        return pd.DataFrame()
+
+    table = pd.DataFrame(rows).sort_values("expected_k", ascending=False)
+    table["predicted_at_utc"] = pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    thin = table[table["starts_seen"] < 5]
+    print(f"  {len(table)} starters. Expected {table['expected_k'].mean():.2f} "
+          f"K over {table['expected_bf'].mean():.1f} batters faced.")
+    if len(thin):
+        print(f"  {len(thin)} with under 5 starts of history -- their batters "
+              f"faced is mostly the league mean, not a read on them.")
+    print(table[["pitcher", "team", "expected_bf", "expected_k",
+                 "prob_k_over_5.5", "prob_k_over_6.5"]]
+          .head(8).to_string(index=False, float_format=lambda v: f"{v:.3f}"))
+    return table
 
 
 def preserve_committed_rows(fresh, existing_path, now_utc, force):
@@ -390,18 +486,20 @@ def main(game_date: str = None):
                 # rate rather than toward league, so a thin split degrades
                 # to "himself" instead of to "average pitcher".
                 split_col = f"pit_{target}_vs_{batter_stand}"
-                allowed = float(pitcher_rates_real.loc[pid].get(
+                unblended = float(pitcher_rates_real.loc[pid].get(
                     split_col, pitcher_rates_real.loc[pid][allowed_col]))
                 # Weight by how much of the game he actually pitches.
                 allowed = blend_with_bullpen(
-                    allowed, bullpen_rates.get(target, league[target]),
+                    unblended, bullpen_rates.get(target, league[target]),
                     starter_share)
             elif (pid is not None and target in pitcher_rates
                     and pid in pitcher_rates[target].index):
+                unblended = float(pitcher_rates[target].loc[pid])
                 allowed = blend_with_bullpen(
-                    float(pitcher_rates[target].loc[pid]),
+                    unblended,
                     bullpen_rates.get(target, league[target]), starter_share)
             else:
+                unblended = league[target]
                 # No starter named (TBD). The whole game is effectively
                 # "unknown pitching", so league average is already right --
                 # blending would double-count the uncertainty.
@@ -410,9 +508,30 @@ def main(game_date: str = None):
             row[f"matchup_{target}"] = log5(
                 row[f"bat_{target}_career"], allowed, league[target]
             )
+            # Keep the UNBLENDED strikeout rate as well.
+            #
+            # `allowed` above is blended across starter and bullpen,
+            # because a hitter's own strikeout prop covers his whole game
+            # and he faces relievers for about 41% of it. That is right for
+            # him and wrong for the STARTER's strikeout prop, which is only
+            # about the innings the starter throws.
+            #
+            # Measured on 128,835 plate appearances from the hitter pool:
+            # bullpens strike out 4.8% more often than starters, so the
+            # blended rate runs 2.4% high for a starter -- roughly +0.12 K
+            # on a 5.0 mean, which moves P(over 5.5) about two points. That
+            # is the same size as this model's entire edge, so the pitcher
+            # side gets its own number rather than borrowing the hitter's.
+            if target == "is_k":
+                row["pit_is_k_starter_only"] = unblended
+                row["matchup_is_k_starter_only"] = log5(
+                    row["bat_is_k_career"], unblended, league[target])
 
         rows.append({**hitter._asdict(), **{c: row.get(c) for c in needed},
                      "stand": row.get("stand", "R"),
+                     "pit_is_k_starter_only": row.get("pit_is_k_starter_only"),
+                     "matchup_is_k_starter_only": row.get(
+                         "matchup_is_k_starter_only"),
                      # Carried explicitly, never via `needed` -- see the
                      # add_form_deviation call above for why that matters.
                      "form_z": row.get("form_z"),
@@ -450,6 +569,28 @@ def main(game_date: str = None):
     for target in RATE_TARGETS:
         model, cols = models[target]
         frame[f"p_{target}"] = model.predict_proba(frame[cols])[:, 1]
+
+    # The same strikeout model, asked a different question: what is this
+    # hitter's chance of striking out against THE STARTER, rather than
+    # across a whole game in which he also faces the bullpen. Only the two
+    # pitcher-derived columns change; everything about the hitter stays
+    # put, and it is the same fitted model, so the two numbers are
+    # comparable by construction.
+    k_model, k_cols = models["is_k"]
+    starter_view = frame.copy()
+    swapped = 0
+    for blended_col, starter_col in (
+            ("pit_is_k_allowed", "pit_is_k_starter_only"),
+            ("matchup_is_k", "matchup_is_k_starter_only")):
+        if starter_col in starter_view.columns:
+            have = starter_view[starter_col].notna()
+            starter_view.loc[have, blended_col] = starter_view.loc[have, starter_col]
+            swapped = int(have.sum())
+    frame["p_is_k_vs_starter"] = k_model.predict_proba(starter_view[k_cols])[:, 1]
+    if swapped:
+        shift = (frame["p_is_k_vs_starter"] - frame["p_is_k"]).mean()
+        print(f"  Starter-only strikeout rate for {swapped} hitters "
+              f"({shift:+.4f} per PA against the blended figure).")
 
     pa_dists = _project_pa(game_totals, frame)
     # The batting order is a sequence, and the model scores each hitter
@@ -740,9 +881,26 @@ def main(game_date: str = None):
     out = preserve_committed_rows(out, existing_path, now_utc, force)
     out = out.sort_values(["game_pk", "lineup_slot"], na_position="last")
 
+    pitchers_out = build_pitcher_props(frame, starters, game_date)
+
     path = cache_path(f"slate_{game_date}")
     out.to_csv(path, index=False)
     print(f"\nSaved {len(out)} predictions to cache/slate_{game_date}.csv")
+
+    if not pitchers_out.empty:
+        # Same preservation rule as the hitters: a starter whose game has
+        # begun keeps the prediction made before it, and only the pitchers
+        # still to throw are refreshed.
+        p_path = cache_path(f"pitchers_{game_date}")
+        starts_by_game = out.groupby("game_pk")["start_time_utc"].first()
+        pitchers_out = pitchers_out.merge(
+            starts_by_game.rename("start_time_utc"),
+            left_on="game_pk", right_index=True, how="left")
+        pitchers_out = preserve_committed_rows(
+            pitchers_out, p_path, now_utc, force)
+        pitchers_out.to_csv(p_path, index=False)
+        print(f"Saved {len(pitchers_out)} pitcher props to "
+              f"cache/pitchers_{game_date}.csv")
 
     # What is actually IN the file, after preservation. On a re-run this is
     # the number that matters, and it will usually be smaller than the

@@ -556,25 +556,95 @@ with tab_pitch:
     html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
          'Starting pitchers</div><div style="color:var(--ink3);font-size:12.5px;'
          'margin-bottom:14px">Strikeout totals for tonight\'s starters.</div>')
-    if "opposing_pitcher" not in df.columns:
+    # The pitcher props live in their own file. A slate row is one hitter,
+    # and a starter is not a hitter -- carrying nine pitcher columns on
+    # every batter row to describe fourteen pitchers would be worse than a
+    # second table.
+    pit_path = os.path.join(CACHE_DIR, f"pitchers_{slate_date}.csv")
+    pit = None
+    if os.path.exists(pit_path):
+        try:
+            pit = pd.read_csv(pit_path)
+        except Exception:
+            pit = None
+
+    if pit is not None and not pit.empty and "prob_k_over_5.5" in pit.columns:
+        pit = pit.sort_values("expected_k", ascending=False)
+        cuts = {c: [float(pit[c].quantile(q)) for q in (.25, .50, .75)]
+                for c in ("prob_k_over_5.5", "prob_k_over_6.5")}
+
+        def kcell(value, col):
+            band = band_of(value, cuts[col])
+            if band == 0:
+                return '<td style="color:var(--ink3)">—</td>'
+            bg, ink = BANDS[band]
+            return (f'<td style="background:{bg};color:{ink};font-weight:560;'
+                    f'text-align:center;border-radius:6px">{pct(value)}</td>')
+
+        # Plain dicts, not itertuples: `prob_k_over_5.5` has a dot in it,
+        # and itertuples silently renames any column that is not a valid
+        # identifier to positional `_7`, `_8`. Reaching for those by
+        # position is how the wrong column ends up under the wrong header.
+        rows = ""
+        for r in pit.to_dict("records"):
+            starts = int(r.get("starts_seen") or 0)
+            # Under five starts the expected batters faced is mostly the
+            # league mean rather than a read on him, and saying so is
+            # cheaper than having someone discover it the hard way.
+            thin = starts < 5
+            rows += (
+                f'<tr><td style="font-weight:560">{r["pitcher"]}</td>'
+                f'<td style="color:var(--ink2)">{r["team"]}</td>'
+                f'<td style="color:var(--ink2)">vs {r["opponent"]}</td>'
+                f'<td style="color:{"var(--warn)" if thin else "var(--ink2)"};'
+                f'text-align:center">{starts}{"*" if thin else ""}</td>'
+                f'<td style="color:var(--ink2);text-align:center">'
+                f'{r["expected_bf"]:.1f}</td>'
+                f'<td style="color:var(--ink);text-align:center;'
+                f'font-weight:560">{r["expected_k"]:.1f}</td>'
+                + kcell(r.get("prob_k_over_5.5"), "prob_k_over_5.5")
+                + kcell(r.get("prob_k_over_6.5"), "prob_k_over_6.5")
+                + '</tr>')
+        html('<table class="plain"><thead><tr><th>Pitcher</th><th>Team</th>'
+             '<th>Opponent</th><th style="text-align:center">Starts</th>'
+             '<th style="text-align:center">Batters faced</th>'
+             '<th style="text-align:center">Expected K</th>'
+             '<th style="text-align:center">Over 5.5 K</th>'
+             '<th style="text-align:center">Over 6.5 K</th>'
+             '</tr></thead><tbody>' + rows + '</tbody></table>')
+        thin_n = int((pit["starts_seen"] < 5).sum()) if "starts_seen" in pit else 0
+        note = (f' · {thin_n} marked * have under five starts of history, so '
+                f'their batters faced is close to the league average'
+                if thin_n else '')
+        html(f'<div style="margin-top:10px;font-size:12px;color:var(--ink3);'
+             f'line-height:1.55">Colour is which quarter of tonight\'s '
+             f'starters he falls into{note}. Batters faced is what drives '
+             f'everything else — a pitcher pulled in the fourth cannot '
+             f'reach six strikeouts however good his rate is.</div>')
+
+    elif "opposing_pitcher" not in df.columns:
         st.info("This slate file has no pitcher information.")
     else:
-        pit = (df.groupby("opposing_pitcher")
-                 .agg(faces=("team", "first"), team=("opponent", "first"),
-                      pa_seen=("pitcher_pa_seen", "first"))
-                 .reset_index())
+        # A slate predicted before the strikeout model existed. Show who is
+        # starting, and say plainly why the numbers are missing rather than
+        # printing dashes that look like a failure.
+        legacy = (df.groupby("opposing_pitcher")
+                    .agg(faces=("team", "first"), team=("opponent", "first"),
+                         pa_seen=("pitcher_pa_seen", "first"))
+                    .reset_index())
         rows = "".join(
             f'<tr><td style="font-weight:560">{r.opposing_pitcher}</td>'
             f'<td style="color:var(--ink2)">{r.team}</td>'
             f'<td style="color:var(--ink2)">vs {r.faces}</td>'
             f'<td style="color:{"var(--ink2)" if r.pa_seen else "var(--warn)"}">'
-            f'{f"{int(r.pa_seen):,}" if r.pa_seen else "no data"}</td>'
-            f'<td style="color:var(--ink3)">—</td>'
-            f'<td style="color:var(--ink3)">—</td></tr>'
-            for r in pit.itertuples())
+            f'{f"{int(r.pa_seen):,}" if r.pa_seen else "no data"}</td></tr>'
+            for r in legacy.itertuples())
         html('<table class="plain"><thead><tr><th>Pitcher</th><th>Team</th>'
-             '<th>Opponent</th><th>PA of history</th><th>Over 5.5 K</th>'
-             '<th>Over 6.5 K</th></tr></thead><tbody>' + rows + '</tbody></table>')
+             '<th>Opponent</th><th>PA of history</th>'
+             '</tr></thead><tbody>' + rows + '</tbody></table>')
+        html('<div style="margin-top:10px;font-size:12px;color:var(--ink3)">'
+             'This slate was predicted before the strikeout model existed. '
+             'Re-run the predictor for this date to fill in the numbers.</div>')
 
 
 # ---------------------------------------------------------- all hitters
