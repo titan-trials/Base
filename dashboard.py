@@ -570,11 +570,20 @@ with tab_pitch:
 
     if pit is not None and not pit.empty and "prob_k_over_5.5" in pit.columns:
         pit = pit.sort_values("expected_k", ascending=False)
-        cuts = {c: [float(pit[c].quantile(q)) for q in (.25, .50, .75)]
-                for c in ("prob_k_over_5.5", "prob_k_over_6.5")}
+        # k_cuts, NOT cuts. This is a flat script: Streamlit runs it top to
+        # bottom every rerun, so every `with tab_x:` block shares one
+        # namespace. Naming this `cuts` overwrote the hitter quartiles
+        # defined near the top, and the All hitters tab -- which runs after
+        # this one and reads them -- died with KeyError: 'prob_hr'.
+        #
+        # The tab that broke was not the tab with the bug, which is what
+        # makes this shape of error expensive to chase. Anything defined
+        # inside a tab block gets a name that could only belong to it.
+        k_cuts = {c: [float(pit[c].quantile(q)) for q in (.25, .50, .75)]
+                  for c in ("prob_k_over_5.5", "prob_k_over_6.5")}
 
         def kcell(value, col):
-            band = band_of(value, cuts[col])
+            band = band_of(value, k_cuts[col])
             if band == 0:
                 return '<td style="color:var(--ink3)">—</td>'
             bg, ink = BANDS[band]
