@@ -67,6 +67,7 @@ from features.rate_features import (
     add_batter_rolling_rates, add_pitcher_rolling_rates, add_matchup_rates,
     rate_feature_cols, RATE_TARGETS, log5,
 )
+from features.form_features import add_form_deviation
 from features.rbi_features import (
     add_base_state, add_lineup_obp_context, train_runner_model,
     train_rbi_model, predict_rbi_per_pa,
@@ -284,6 +285,21 @@ def main(game_date: str = None):
     pa = add_batter_rolling_rates(pa)
     pa = add_pitcher_rolling_rates(pa)
     pa = add_matchup_rates(pa)
+
+    # Form deviation -- how far a hitter is running from his OWN baseline.
+    #
+    # This is a marker, not a feature. It is deliberately NOT added to
+    # rate_feature_cols(), and that omission is load-bearing rather than an
+    # oversight: `needed` below is built from rate_feature_cols(), and it
+    # drives both `train_pa.dropna(subset=needed)` and
+    # `frame.dropna(subset=needed)`. Putting form columns in there would
+    # silently DELETE from the slate every hitter without enough history to
+    # score one -- a display marker quietly removing predictions.
+    #
+    # Keeping it out of that one function is therefore what guarantees the
+    # marker cannot reach the model, enforced by the code rather than by
+    # anyone remembering.
+    pa = add_form_deviation(pa)
     pa["park_hr_factor"] = pa["home_team"].apply(get_park_factor) / 100.0
 
     game_totals = build_game_totals(pa)
@@ -397,6 +413,10 @@ def main(game_date: str = None):
 
         rows.append({**hitter._asdict(), **{c: row.get(c) for c in needed},
                      "stand": row.get("stand", "R"),
+                     # Carried explicitly, never via `needed` -- see the
+                     # add_form_deviation call above for why that matters.
+                     "form_z": row.get("form_z"),
+                     "form_state": row.get("form_state", "Unknown"),
                      "pitcher_pa_seen": (int(pitcher_rates_real.loc[pid, "pit_pa_seen"])
                                          if has_real else 0)})
 
@@ -406,6 +426,20 @@ def main(game_date: str = None):
         return
     frame = frame.dropna(subset=needed).reset_index(drop=True)
     print(f"  {len(frame)} hitters have enough history to score.")
+
+    if "form_state" in frame.columns:
+        counts = frame["form_state"].value_counts()
+        hot, cold = int(counts.get("Hot", 0)), int(counts.get("Cold", 0))
+        unknown = int(counts.get("Unknown", 0))
+        print(f"  Form marker: {hot} hot, {cold} cold, "
+              f"{len(frame) - hot - cold - unknown} normal, {unknown} unknown.")
+        # About a dozen of these are expected from noise alone on a
+        # 270-hitter slate -- the threshold was set from a simulation of
+        # players whose true rates never move. A night with 60 flagged is
+        # not a hot slate, it is a bug.
+        if hot + cold > 0.25 * max(len(frame), 1):
+            print(f"  WARNING: {hot + cold} of {len(frame)} flagged. That is "
+                  f"far above the ~5% noise floor -- check form_features.")
 
     # ---- 6. Per-PA probabilities and PA projection -------------------
     for target in RATE_TARGETS:
@@ -677,6 +711,9 @@ def main(game_date: str = None):
         "game_pk", "player_id", "name", "team", "opponent", "is_home", "lineup_slot",
         "lineup_status", "opposing_pitcher", "venue_name", "start_time_utc",
         "expected_pa", "batter_pa_seen", "pitcher_pa_seen",
+        # Form marker. Written to the slate so it can be graded later, and
+        # read by nothing that produces the probabilities beside it.
+        "form_z", "form_state",
         "prob_hr", "prob_hit", "prob_walk", "prob_k",
     ] + [f"prob_hrr_over_{l}" for l in HRR_LINES] \
       + [f"prob_tb_over_{l}" for l in TB_LINES] \

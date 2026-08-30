@@ -175,6 +175,39 @@ def clean_mask(frame) -> pd.Series:
     return (written < start).fillna(False)
 
 
+# Each count prop: (prediction-column prefix, actual column, label). Total
+# bases and hits come straight off the PA table -- both settle inside the
+# plate appearance, so unlike H+R+RBI they need no official boxscore join
+# to be scored honestly.
+COUNT_PROPS = [
+    (HRR_PREFIX, "hrr", "H+R+RBI"),
+    ("prob_tb_over_", "total_bases", "Total bases"),
+    ("prob_hits_over_", "hits", "Hits"),
+]
+
+
+def iter_scoreable(frame):
+    """
+    Yield (label, prediction_col, truth) for every prop this frame can score.
+
+    One definition of "what the props are and how each one is graded",
+    used by the main scorer and by the form-marker self-test. Two functions
+    deriving the same thing from the same source is how they quietly drift
+    apart -- the lesson already written into data/batting_lines.py.
+    """
+    for prediction_col, (actual_col, label) in BINARY_PROPS.items():
+        if prediction_col in frame and actual_col in frame:
+            yield label, prediction_col, frame[actual_col]
+
+    for prefix, actual_col, label in COUNT_PROPS:
+        if actual_col not in frame.columns:
+            continue
+        for column in [c for c in frame.columns if c.startswith(prefix)]:
+            line = float(column[len(prefix):])
+            yield (f"{label} over {line}", column,
+                   (frame[actual_col] > line).astype(int))
+
+
 def score_frame(frame) -> list:
     """
     Every prop scored against one frame. Returns a list of result dicts.
@@ -185,33 +218,201 @@ def score_frame(frame) -> list:
     """
     work = frame.copy()
     rows = []
-    for prediction_col, (actual_col, label) in BINARY_PROPS.items():
-        if prediction_col not in work or actual_col not in work:
-            continue
-        result = score_prop(work, prediction_col, actual_col, label)
+    for label, prediction_col, truth in iter_scoreable(work):
+        flag = f"_truth_{label}"
+        work[flag] = truth.to_numpy()
+        result = score_prop(work, prediction_col, flag, label)
         if result:
             rows.append(result)
-
-    # Each prop: (prediction-column prefix, actual column, label). Total
-    # bases and hits come straight off the PA table -- both settle inside
-    # the plate appearance, so unlike H+R+RBI they need no official
-    # boxscore join to be scored honestly.
-    COUNT_PROPS = [
-        (HRR_PREFIX, "hrr", "H+R+RBI"),
-        ("prob_tb_over_", "total_bases", "Total bases"),
-        ("prob_hits_over_", "hits", "Hits"),
-    ]
-    for prefix, actual_col, label in COUNT_PROPS:
-        if actual_col not in work.columns:
-            continue
-        for column in [c for c in work.columns if c.startswith(prefix)]:
-            line = float(column[len(prefix):])
-            flag = f"_actual_{actual_col}_over_{line}"
-            work[flag] = (work[actual_col] > line).astype(int)
-            result = score_prop(work, column, flag, f"{label} over {line}")
-            if result:
-                rows.append(result)
     return rows
+
+
+FORM_LOG_KEY = "form_log"
+
+
+def score_form_marker(frame, game_date: str):
+    """
+    Does the hot/cold marker predict anything?
+
+    The marker feeds no model, so it cannot be graded by Brier skill the
+    way a prop is. The question it answers is narrower and simpler: among
+    hitters flagged Hot, did MORE happen than the model predicted for them,
+    and among those flagged Cold, less?
+
+    That comparison is the right one precisely because the model does not
+    know about the flag. Its probabilities are an unbiased forecast made in
+    ignorance of form, so any consistent gap between predicted and actual
+    inside a flagged group is information the model is missing.
+
+    Reported in standard errors, because on one slate a dozen flagged
+    hitters will drift a couple of points in some direction regardless.
+
+    HOW LONG THIS TAKES TO ANSWER
+    -----------------------------
+    Simulated, 500 runs per point, 270 hitters a slate, no optional
+    stopping -- the smallest number of slates giving 80% power to clear
+    2 sigma on the SLOPE test:
+
+        true slope   a 2sd-hot hitter beats forecast by   slates
+          +0.005                1.0 points                 >120
+          +0.010                2.0 points                   90
+          +0.015                3.0 points                   45
+          +0.020                4.0 points                   20
+          +0.030                6.0 points                   12
+
+    With a true slope of zero the test fires 5.4% of the time at 30
+    slates, which is what a 2-sigma threshold should do and confirms the
+    pooling is calibrated rather than merely plausible.
+
+    So: if form carries an effect as large as the hot-hand literature
+    suggests, twenty slates or so. If it is a one-point effect, this will
+    never resolve it and the honest answer will be "too small to matter",
+    which is also worth knowing.
+
+    Appends to cache/form_log.csv so the answer accumulates.
+    """
+    if "form_state" not in frame.columns or "form_z" not in frame.columns:
+        return None
+
+    rows = []
+    for state in ("Hot", "Cold"):
+        sub = frame[frame["form_state"] == state]
+        # Anything non-empty is logged. A group of four gives a noisy
+        # per-slate z and a perfectly good contribution to the pooled
+        # average, and discarding it would throw away evidence that never
+        # comes back.
+        if sub.empty:
+            continue
+        for label, prediction_col, truth in iter_scoreable(sub):
+            said = float(sub[prediction_col].mean())
+            did = float(truth.mean())
+            n = len(sub)
+            se = (said * (1.0 - said) / n) ** 0.5 if 0 < said < 1 else float("nan")
+            rows.append({
+                "game_date": game_date, "state": state, "label": label,
+                "n": n, "said": said, "did": did,
+                "gap": did - said,
+                "z": (did - said) / se if se and se > 0 else float("nan"),
+            })
+
+    # The comparison above is the readable one and the WEAK one. Roughly
+    # twelve hitters a slate get flagged, so detecting an effect the size
+    # Green and Zwiebel measured would take several hundred slates -- not a
+    # self-test, a career.
+    #
+    # The strong version uses every hitter. Regress each hitter's residual
+    # (what happened minus what the model said) on his continuous form_z.
+    # If form carries information the model lacks, that slope is positive:
+    # hitters running hot beat their forecast in proportion to how hot.
+    # 270 rows a slate instead of 12 is more than twenty times the
+    # evidence, and it uses the size of the deviation rather than throwing
+    # it away at a threshold.
+    slopes = []
+    have_z = frame[frame["form_z"].notna()]
+    if len(have_z) >= 30:
+        x = have_z["form_z"].to_numpy(dtype=float)
+        xc = x - x.mean()
+        sxx = float((xc ** 2).sum())
+        for label, prediction_col, truth in iter_scoreable(have_z):
+            y = (truth.to_numpy(dtype=float)
+                 - have_z[prediction_col].to_numpy(dtype=float))
+            if sxx <= 0 or len(y) < 30:
+                continue
+            slope = float((xc * (y - y.mean())).sum() / sxx)
+            resid = y - y.mean() - slope * xc
+            dof = len(y) - 2
+            se = ((resid ** 2).sum() / (dof * sxx)) ** 0.5 if dof > 0 else float("nan")
+            slopes.append({
+                "game_date": game_date, "state": "SLOPE", "label": label,
+                "n": len(y), "said": float("nan"), "did": float("nan"),
+                "gap": slope, "z": slope / se if se and se > 0 else float("nan"),
+                "slope_se": se,
+            })
+    rows.extend(slopes)
+
+    if not rows:
+        return None
+
+    entry = pd.DataFrame(rows)
+    log_path = cache_path(FORM_LOG_KEY)
+    if os.path.exists(log_path):
+        previous = pd.read_csv(log_path)
+        previous = previous[previous["game_date"] != game_date]
+        log = pd.concat([previous, entry], ignore_index=True)
+    else:
+        log = entry
+    log.to_csv(log_path, index=False)
+
+    n_hot = int((frame["form_state"] == "Hot").sum())
+    n_cold = int((frame["form_state"] == "Cold").sum())
+    print("\n" + "=" * 72)
+    print(f"FORM MARKER SELF-TEST -- {n_hot} hot, {n_cold} cold "
+          f"(model does not use this)")
+    print("=" * 72)
+
+    # Pool across every slate scored so far, weighting by group size.
+    def _pool(g):
+        w = g["n"].to_numpy(dtype=float)
+        said = float(np.average(g["said"], weights=w))
+        did = float(np.average(g["did"], weights=w))
+        total = float(w.sum())
+        se = (said * (1.0 - said) / total) ** 0.5 if 0 < said < 1 else float("nan")
+        return pd.Series({"slates": g["game_date"].nunique(), "n": total,
+                          "said": said, "did": did, "gap": did - said,
+                          "z": (did - said) / se if se and se > 0 else float("nan")})
+
+    # ---- The headline: does form_z predict the residual? ---------------
+    slope_log = log[log["state"] == "SLOPE"].copy()
+    if not slope_log.empty and "slope_se" in slope_log.columns:
+        # Inverse-variance pooling across slates -- the standard way to
+        # combine independent estimates of the same quantity, and correct
+        # here because each slate is a separate sample of the same slope.
+        out = []
+        for label, g in slope_log.groupby("label"):
+            g = g[g["slope_se"].notna() & (g["slope_se"] > 0)]
+            if g.empty:
+                continue
+            w = 1.0 / g["slope_se"].to_numpy(dtype=float) ** 2
+            b = float((g["gap"].to_numpy(dtype=float) * w).sum() / w.sum())
+            se = float((1.0 / w.sum()) ** 0.5)
+            out.append({"label": label, "slates": g["game_date"].nunique(),
+                        "n": int(g["n"].sum()), "slope": b, "se": se,
+                        "z": b / se if se > 0 else float("nan")})
+        if out:
+            table = pd.DataFrame(out).sort_values("z", ascending=False)
+            print("\n  Does form predict the residual? "
+                  "(slope of actual-minus-predicted on form_z)")
+            print(table.to_string(index=False,
+                                  float_format=lambda v: f"{v:+.4f}"))
+            print("\n  slope = how much better a hitter does per 1 sd of form.")
+            print("          +0.02 would mean a hitter 2 sd hot beats his")
+            print("          forecast by about 4 percentage points.")
+            print("  Positive and growing |z| means the marker is real.")
+
+    # ---- The readable version, on the flagged groups only --------------
+    pooled = (log[log["state"] != "SLOPE"]
+              .groupby(["state", "label"])[["n", "said", "did", "game_date"]]
+              .apply(_pool).reset_index())
+    for state, sign in (("Hot", +1), ("Cold", -1)):
+        part = pooled[pooled["state"] == state]
+        if part.empty:
+            continue
+        print(f"\n  {state} hitters, pooled across "
+              f"{int(part['slates'].max())} slate(s):")
+        print(part[["label", "n", "said", "did", "gap", "z"]]
+              .to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+        agree = float((np.sign(part["gap"]) == sign).mean())
+        print(f"  {agree:.0%} of props move in the direction the marker "
+              f"predicts ({'above' if sign > 0 else 'below'} forecast).")
+
+    print("\n  Read the SLOPE table, not the group table. Only about a dozen")
+    print("  hitters a slate get flagged, so the group comparison would need")
+    print("  hundreds of slates to resolve anything; the slope uses all 270.")
+    print("  And note the props are near-restatements of each other, so a")
+    print("  column of agreeing signs is closer to one observation than to")
+    print("  fourteen.")
+    print(f"\n  Log: cache/{FORM_LOG_KEY}.csv")
+    return pooled
 
 
 def main(game_date: str = None):
@@ -496,6 +697,11 @@ def main(game_date: str = None):
         print("\n  Compare the running Brier skill to the backtest figures in")
         print("  CONTEXT.md. If live is meaningfully lower, the backtest was")
         print("  optimistic -- which is worth knowing and worth writing down.")
+
+    # Graded on the CLEAN rows for the same reason everything else is: a
+    # prediction made after the game started is not a forecast the marker
+    # can be credited or blamed for.
+    score_form_marker(basis, game_date)
 
     print(f"\n  Log: cache/{SCORING_LOG_KEY}.csv")
 

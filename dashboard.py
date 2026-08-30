@@ -176,6 +176,14 @@ div[data-testid="stTabPanel"]:has(.sp-wide)
 .sp-pn{font-size:var(--fs-list);color:var(--ink)}
 .sp-pn i{color:var(--ink3);font-style:normal;font-size:var(--fs-meta)}
 .sp-ctx{color:var(--ink3);font-size:var(--fs-meta)}
+/* Form marker. Deliberately quiet -- an outline chip, not a filled badge.
+   It is an observation the model does not use, and dressing it like a
+   prediction would invite reading it as one. */
+.sp-form{display:inline-block;padding:1px 6px;border-radius:5px;font-size:11px;
+ font-weight:600;letter-spacing:.02em;border:1px solid;margin-left:6px;
+ vertical-align:1px}
+.sp-form.hot{color:var(--b4);border-color:rgba(52,211,153,.5)}
+.sp-form.cold{color:var(--b1ink);border-color:rgba(208,59,59,.55)}
 .sp-track{height:7px;background:var(--line);border-radius:4px}
 .sp-fill{height:7px;background:var(--accent);border-radius:4px}
 .sp-pv{text-align:right;font-variant-numeric:tabular-nums;font-size:var(--fs-list);color:var(--ink)}
@@ -368,6 +376,28 @@ tab_slate, tab_games, tab_pitch, tab_all, tab_res = st.tabs(
     ["Slate", "Games", "Pitchers", "All hitters", "Results"])
 
 
+def form_chip(row) -> str:
+    """
+    Hot / Cold marker, or nothing at all.
+
+    Only the two extremes render. "Normal" and "Unknown" produce an empty
+    string rather than a grey chip, because a marker shown on every hitter
+    is not a marker -- it is a column, and it would compete with the
+    probability that is actually the point of the row.
+    """
+    state = row.get("form_state")
+    if state not in ("Hot", "Cold"):
+        return ""
+    z = row.get("form_z")
+    title = (f"Running {abs(z):.1f} standard deviations "
+             f"{'above' if state == 'Hot' else 'below'} his own baseline "
+             f"(strikeout, hit and on-base rates over his last 25 and 75 "
+             f"plate appearances). Not used by the model."
+             if pd.notna(z) else "")
+    return (f'<span class="sp-form {state.lower()}" title="{title}">'
+            f'{state.upper()}</span>')
+
+
 def context_line(row) -> str:
     bits = []
     slot = row.get("lineup_slot")
@@ -397,7 +427,7 @@ with tab_slate:
     top = df.nlargest(20, prop)
     heroes = "".join(
         f'<div class="sp-hero"><div class="sp-rk">#{i} on the slate</div>'
-        f'<div class="sp-nm">{r["name"]}</div>'
+        f'<div class="sp-nm">{r["name"]}{form_chip(r)}</div>'
         f'<div class="sp-mt">{r.get("team","")} vs {r.get("opponent","")}'
         f' · {r.get("opposing_pitcher","")}</div>'
         f'<div class="sp-big">{pct(r[prop])}</div>'
@@ -410,7 +440,8 @@ with tab_slate:
     # 25% both look like "the top of the scale".
     rows = "".join(
         f'<div class="sp-r">{i}</div>'
-        f'<div class="sp-pn">{r["name"]} <i>{r.get("team","")}</i></div>'
+        f'<div class="sp-pn">{r["name"]} <i>{r.get("team","")}</i>'
+        f'{form_chip(r)}</div>'
         f'<div class="sp-ctx">{context_line(r)}</div>'
         f'<div class="sp-track"><div class="sp-fill" '
         f'style="width:{min(r[prop] * 100, 100):.1f}%"></div></div>'
@@ -548,7 +579,10 @@ with tab_pitch:
 
 # ---------------------------------------------------------- all hitters
 BASE_LABELS = {"name": "Hitter", "team": "Team", "opponent": "Opp",
-               "lineup_slot": "Slot", "expected_pa": "PA"}
+               "lineup_slot": "Slot", "expected_pa": "PA",
+               # Sortable here, which the chips on the Slate tab are not --
+               # this is the view for "show me everyone running hot".
+               "form_z": "Form"}
 
 # Hover text for the prop columns. "TB 1.5" is unreadable to anyone who has
 # not been staring at this for a week, and the header itself has no room to
@@ -633,6 +667,9 @@ with tab_all:
             fmt["PA"] = "{:.2f}"
         if "Slot" in view.columns:
             fmt["Slot"] = "{:.0f}"
+        if "Form" in view.columns:
+            # Signed, because the sign is the whole message.
+            fmt["Form"] = "{:+.1f}"
         styled = styled.format(fmt, na_rep="—")
 
         # Explicit pixel widths on the five identity columns. Left to size
@@ -653,6 +690,14 @@ with tab_all:
                 help="Plate appearances the model expects him to get. "
                      "Everything else scales off this -- a leadoff hitter "
                      "gets roughly one more trip than the number nine."),
+            "Form": st.column_config.Column(
+                width=58,
+                help="How far he is running from his OWN baseline, in "
+                     "standard deviations, over his last 25 and 75 plate "
+                     "appearances. Positive is hot. Built on strikeout, "
+                     "hit and on-base rates. Beyond ±2.0 he is flagged. "
+                     "The model does not use this -- it is being tracked "
+                     "to find out whether it predicts anything."),
         }
         for key, (lab, _fam) in props.items():
             if lab in view.columns:
