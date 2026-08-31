@@ -1154,7 +1154,7 @@ with tab_res:
         # clean_* columns. Fall back to their plain values rather than
         # dropping the slate -- the distinction did not exist to record.
         log = raw.copy()
-        for col in ("n", "base_rate", "mean_pred", "brier"):
+        for col in ("n", "base_rate", "mean_pred", "brier", "auc"):
             clean_col = f"clean_{col}"
             if clean_col in log.columns:
                 log[col] = log[clean_col].fillna(log[col])
@@ -1203,14 +1203,21 @@ with tab_res:
             # 270 hitters is noise; the same gap on 5,000 is a bias.
             se = (did * (1.0 - did) / w) ** 0.5 if w else float("nan")
             sigma = (said - did) / se if se else float("nan")
+            # Ranking, pooled the same way. This is the OTHER half of being
+            # right and it was invisible on this page until now: a model
+            # that quotes the league rate to every hitter matches the slate
+            # total exactly and has an AUC of 0.50. Calibration alone
+            # cannot tell those two apart.
+            auc = ((g["auc"] * g["n"]).sum() / w
+                   if "auc" in g and g["auc"].notna().any() else float("nan"))
             return pd.Series({"n": w, "said": said, "did": did,
-                              "skill": skill, "sigma": sigma})
+                              "auc": auc, "skill": skill, "sigma": sigma})
 
         # Column list is explicit: `groupby(...).apply()` over the whole
         # frame warns (and in newer pandas will error) about operating on
         # the grouping column itself.
         by_prop = (log.groupby("label", sort=False)
-                      [["n", "mean_pred", "base_rate", "brier"]]
+                      [["n", "mean_pred", "base_rate", "brier", "auc"]]
                       .apply(pooled).reset_index())
 
         # The headline is the edge, not the average probability: averaging
@@ -1245,12 +1252,19 @@ with tab_res:
             f'<td>{pct(r.did)}</td>'
             f'<td style="color:{"var(--ink2)" if abs(r.sigma) < 2 else "var(--warn)"}">'
             f'{r.sigma:+.1f}σ</td>'
+            # Left deliberately uncoloured above 0.50. Shading it would
+            # invite reading a gap between 0.57 and 0.62 that four slates
+            # cannot support. The one threshold that means anything is the
+            # coin flip, so that is the only one marked.
+            f'<td style="color:{"var(--b1ink)" if r.auc < 0.5 else "var(--ink2)"};'
+            f'font-variant-numeric:tabular-nums">'
+            f'{"—" if pd.isna(r.auc) else f"{r.auc:.3f}"}</td>'
             f'<td style="color:{skill_color(r.skill)};font-weight:560">'
             f'{r.skill * 100:+.2f}%</td></tr>'
             for r in by_prop.itertuples())
         html('<table class="plain"><thead><tr><th>Prop</th><th>Graded</th>'
              '<th>Model said</th><th>Actually happened</th>'
-             '<th>Miss</th><th>Edge</th></tr></thead><tbody>'
+             '<th>Miss</th><th>Ranking</th><th>Edge</th></tr></thead><tbody>'
              + rows + '</tbody></table>')
 
         html('<div style="margin-top:14px;font-size:12px;color:var(--ink3);'
@@ -1263,6 +1277,87 @@ with tab_res:
              'the model expected and what happened, measured in standard '
              'errors — under 2σ is the sample being small, over 2σ is the '
              'model being wrong.</div>')
+
+        # ---- how to read the table above ------------------------------
+        #
+        # The question this answers -- "the model said 11%, and the guy
+        # either homered or he didn't, so how is that graded?" -- is the
+        # single most reasonable confusion this page produces, and it comes
+        # back every time you look at it after a gap. So the answer lives
+        # here rather than in a document somewhere else, and it is built
+        # from the LIVE numbers so the worked example never goes stale.
+        #
+        # Collapsed by default: the numbers are the point of the tab, and
+        # an open explainer would push them under the fold.
+        with st.expander("How to read this"):
+            # Prefer home runs for the example -- a rare event over a big
+            # pile is the clearest case. Fall back to whatever has the most
+            # rows if the HR prop is not in the log.
+            ex = by_prop[by_prop["label"] == "at least 1 home run"]
+            if ex.empty:
+                ex = by_prop.nlargest(1, "n")
+            ex = ex.iloc[0]
+            n_ex = int(ex["n"])
+            expected, actual = ex["said"] * n_ex, ex["did"] * n_ex
+
+            html(
+                f'<div style="font-size:13px;line-height:1.65;color:var(--ink2);'
+                f'max-width:760px">'
+
+                f'<p style="margin:0 0 12px"><b style="color:var(--ink)">'
+                f'A single prediction cannot be checked.</b> The model said '
+                f'one hitter 24% and another 4%. Each of them either homered '
+                f'or did not. Neither number was wrong. So the grading never '
+                f'looks at one prediction — it looks at a pile of them.</p>'
+
+                f'<p style="margin:0 0 6px"><b style="color:var(--ink)">'
+                f'Add the percentages up.</b> That is how many the model '
+                f'expected to see. For <i>{ex["label"]}</i>:</p>'
+                f'<div style="background:var(--card2);border:1px solid var(--line);'
+                f'border-radius:9px;padding:12px 14px;margin:0 0 12px;'
+                f'font-variant-numeric:tabular-nums">'
+                f'{n_ex:,} hitters averaging {pct(ex["said"])} '
+                f'&nbsp;→&nbsp; <b style="color:var(--ink)">'
+                f'{expected:.0f} expected</b><br>'
+                f'What actually happened &nbsp;→&nbsp; '
+                f'<b style="color:var(--ink)">{actual:.0f} of them</b></div>'
+                f'<p style="margin:0 0 14px">That is the whole '
+                f'<i>Model said</i> / <i>Actually happened</i> pair — those '
+                f'two counts, divided by {n_ex:,}. The model committed to '
+                f'{expected:.0f} across the slate and {actual:.0f} showed '
+                f'up.</p>'
+
+                f'<p style="margin:0 0 12px"><b style="color:var(--ink)">'
+                f'But matching the total is only half of being right.</b> '
+                f'Imagine a lazy model that quoted {pct(ex["said"])} to '
+                f'<i>every</i> hitter — the best power hitter in baseball '
+                f'and a backup catcher, identical. It would also expect '
+                f'{expected:.0f}. It would look perfect on that column. And '
+                f'it would be worthless.</p>'
+
+                f'<p style="margin:0 0 12px">So the second question is '
+                f'whether the hitters it rated high actually did it more '
+                f'often than the ones it rated low. That is '
+                f'<b style="color:var(--ink)">Ranking</b>: pick one hitter '
+                f'who did it and one who did not, at random — it is how '
+                f'often the model had given the right one the bigger '
+                f'number. 0.50 is a coin flip, and the lazy model above '
+                f'scores exactly 0.50 however well it matches the total.</p>'
+
+                f'<p style="margin:0 0 12px"><b style="color:var(--ink)">'
+                f'Edge</b> is both halves in one number: how much of the '
+                f'guesswork the model removes against quoting the league '
+                f'rate to everybody. <b style="color:var(--ink)">Miss</b> '
+                f'asks whether the gap could just be luck — it is the gap '
+                f'divided by the random swing you would expect on this many '
+                f'hitters, so under 2σ means the sample is small, not that '
+                f'the model is off.</p>'
+
+                f'<p style="margin:0;color:var(--ink3)">Both columns have to '
+                f'be right. A model can match every total and rank nothing, '
+                f'or rank perfectly while being systematically too high. '
+                f'Neither one alone is a working model.</p>'
+                f'</div>')
 
         if not showing_tainted and graded < full_graded:
             html(f'<div style="margin-top:8px;font-size:12px;color:var(--ink3);'
