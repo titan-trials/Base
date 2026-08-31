@@ -63,6 +63,26 @@ cache/*
 !cache/odds_*.csv
 !cache/market_log.csv
 
+# Read by the pitcher tab's market block. Derived from the two files
+# above, so it COULD be regenerated -- but only by running
+# compare_market.py, which the deployed app cannot do. Same rule as
+# always: if the dashboard reads it, it has to be tracked.
+!cache/market_compare_*.csv
+
+# Team scores and win probabilities, one row per game. Read by the Game
+# Lines tab, written by predict_slate.py alongside the hitter props. A few
+# hundred bytes a night, and like every other prediction file here it is a
+# RECORD of what was said before first pitch -- regenerating it later
+# would produce a different number from different data.
+!cache/teams_*.csv
+
+# Final scores, one row per team per game, the whole regular season in one
+# file. The team run model's dispersion is fitted to it, so without it the
+# model silently falls back to a league-average shape. About 1 MB, and it
+# takes one API call to rebuild -- but the deployed app has no way to make
+# that call, which is the whole argument for tracking it.
+!cache/team_lines.csv
+
 # Regenerable, and the expensive part of the repo:
 #   statcast_player_*.csv    ~1.2 GB, re-pulled by predict_slate.py
 #   statcast_pitcher_*.csv   re-pulled per slate, ~30 starters at a time

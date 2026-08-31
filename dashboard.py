@@ -238,6 +238,37 @@ table.sp tr.team .tn{font-weight:660;font-size:15px;color:var(--ink)}
 .sp-kpi .v{font-size:27px;font-weight:660;color:var(--ink);display:block;
  font-variant-numeric:tabular-nums}
 .sp-kpi .k{font-size:11.5px;color:var(--ink3)}
+/* ---- game cards (Game Lines) ------------------------------------
+   Two per row on a wide screen, one on a narrow one. auto-fill with a
+   minimum rather than a fixed repeat(2), so the cards reflow instead of
+   squeezing when the window is small. */
+.sp-gl{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));
+ gap:14px;margin:2px 0 20px}
+.sp-gc{background:var(--card);border:1px solid var(--line);border-radius:12px;
+ padding:14px 16px 13px}
+.sp-gc .hd{display:flex;justify-content:space-between;align-items:baseline;
+ font-size:11px;color:var(--ink3);letter-spacing:.06em;text-transform:uppercase;
+ margin-bottom:9px}
+.sp-gc .sd{display:flex;justify-content:space-between;align-items:flex-end}
+.sp-gc .tm{font-size:16.5px;font-weight:660;color:var(--ink)}
+.sp-gc .rn{font-size:25px;font-weight:680;color:var(--ink);
+ font-variant-numeric:tabular-nums;line-height:1.05}
+.sp-gc .rn.dim{color:var(--ink2)}
+/* Win probability as one split bar rather than two numbers. The whole
+   point of "LAD 61 COL 39" is that the two are one quantity. */
+.sp-bar{display:flex;height:8px;border-radius:5px;overflow:hidden;
+ background:var(--line);margin:10px 0 5px}
+.sp-bar i{display:block;height:100%}
+.sp-bar .a{background:var(--accent)}
+.sp-bar .h{background:var(--b4)}
+.sp-wp{display:flex;justify-content:space-between;font-size:12.5px;
+ color:var(--ink2);font-variant-numeric:tabular-nums}
+.sp-wp b{color:var(--ink);font-weight:620}
+.sp-sc{margin-top:11px;padding-top:10px;border-top:1px solid var(--line);
+ font-size:var(--fs-meta);line-height:1.75;color:var(--ink3)}
+.sp-sc .who{color:var(--ink2)}
+.sp-sc .who b{color:var(--ink);font-weight:560}
+.sp-thin{color:var(--b2ink);font-size:11.5px;margin-top:7px}
 table.plain{width:100%;border-collapse:collapse;font-size:13px}
 table.plain th{text-align:left;color:var(--ink3);font-size:11px;letter-spacing:.06em;
  text-transform:uppercase;padding:0 10px 8px;border-bottom:1px solid var(--line)}
@@ -437,8 +468,8 @@ if _when_class == "past":
          f'You are looking at what the model said before '
          f'{_when.lower()}\'s slate, not at tonight\'s.</div>')
 
-tab_slate, tab_games, tab_pitch, tab_all, tab_res = st.tabs(
-    ["Slate", "Games", "Pitchers", "All hitters", "Results"])
+tab_slate, tab_games, tab_pitch, tab_lines, tab_all, tab_res = st.tabs(
+    ["Slate", "Games", "Pitchers", "Game Lines", "All hitters", "Results"])
 
 
 def form_chip(row) -> str:
@@ -633,28 +664,7 @@ with tab_pitch:
         except Exception:
             pit = None
 
-    # The book's line, when compare_market.py has been run for this date.
-    #
-    # Read from the file that script writes rather than joining the odds
-    # feed here. The join needs accent-stripping and suffix handling, and
-    # a second copy of that logic living in the dashboard is how the two
-    # quietly disagree about who "Ronald Acuna Jr." is. compare_market
-    # owns the matching; this just displays the answer.
-    #
-    # It also keeps this file's no-project-imports rule intact, which is
-    # what lets the deployed app run on three packages.
-    mkt = None
-    mkt_path = os.path.join(CACHE_DIR, f"market_compare_{slate_date}.csv")
-    if os.path.exists(mkt_path):
-        try:
-            mkt = pd.read_csv(mkt_path)[
-                ["pitcher", "line", "model_prob", "market_prob", "edge"]]
-        except Exception:
-            mkt = None
-
     if pit is not None and not pit.empty and "prob_k_over_5.5" in pit.columns:
-        if mkt is not None and not mkt.empty:
-            pit = pit.merge(mkt, on="pitcher", how="left")
         pit = pit.sort_values("expected_k", ascending=False)
         # k_cuts, NOT cuts. This is a flat script: Streamlit runs it top to
         # bottom every rerun, so every `with tab_x:` block shares one
@@ -667,39 +677,6 @@ with tab_pitch:
         # inside a tab block gets a name that could only belong to it.
         k_cuts = {c: [float(pit[c].quantile(q)) for q in (.25, .50, .75)]
                   for c in ("prob_k_over_5.5", "prob_k_over_6.5")}
-
-        has_market = "market_prob" in pit.columns and pit["market_prob"].notna().any()
-
-        def market_cells(r):
-            """
-            The book's line, the model read AT that line, and the gap.
-
-            Blank when no book quoted this pitcher, which is most of them
-            on a slate fetched early. An empty cell is the honest render:
-            filling it with the model's 5.5 number beside a market price
-            for some other line would be comparing two different questions.
-            """
-            if not has_market:
-                return ''
-            line, mp, kp = r.get("line"), r.get("market_prob"), r.get("model_prob")
-            if pd.isna(line) or pd.isna(mp) or pd.isna(kp):
-                return ('<td colspan="4" style="color:var(--ink3);'
-                        'text-align:center;font-size:12px">no line posted</td>')
-            edge = kp - mp
-            # Green where the model is higher, red lower. This is a
-            # DISAGREEMENT, not a recommendation -- on four pitchers the
-            # model and the market agreed to within 2.3 points, and a gap
-            # is a question about what one of them knows, not a bet.
-            colour = ("var(--b4)" if edge > 0.03 else
-                      "var(--b1ink)" if edge < -0.03 else "var(--ink2)")
-            return (f'<td style="color:var(--ink);text-align:center;'
-                    f'font-weight:560">{line:g}</td>'
-                    f'<td style="color:var(--ink2);text-align:center">'
-                    f'{pct(kp)}</td>'
-                    f'<td style="color:var(--ink2);text-align:center">'
-                    f'{pct(mp)}</td>'
-                    f'<td style="color:{colour};text-align:center;'
-                    f'font-weight:560">{edge:+.1%}</td>')
 
         def kcell(value, col):
             band = band_of(value, k_cuts[col])
@@ -732,20 +709,13 @@ with tab_pitch:
                 f'font-weight:560">{r["expected_k"]:.1f}</td>'
                 + kcell(r.get("prob_k_over_5.5"), "prob_k_over_5.5")
                 + kcell(r.get("prob_k_over_6.5"), "prob_k_over_6.5")
-                + market_cells(r)
                 + '</tr>')
-        market_head = ('<th style="text-align:center">Book line</th>'
-                       '<th style="text-align:center">Model</th>'
-                       '<th style="text-align:center">Market</th>'
-                       '<th style="text-align:center">Edge</th>'
-                       if has_market else '')
         html('<table class="plain"><thead><tr><th>Pitcher</th><th>Team</th>'
              '<th>Opponent</th><th style="text-align:center">Starts</th>'
              '<th style="text-align:center">Batters faced</th>'
              '<th style="text-align:center">Expected K</th>'
              '<th style="text-align:center">Over 5.5 K</th>'
              '<th style="text-align:center">Over 6.5 K</th>'
-             + market_head +
              '</tr></thead><tbody>' + rows + '</tbody></table>')
         thin_n = int((pit["starts_seen"] < 5).sum()) if "starts_seen" in pit else 0
         note = (f' · {thin_n} marked * have under five starts of history, so '
@@ -780,6 +750,239 @@ with tab_pitch:
         html('<div style="margin-top:10px;font-size:12px;color:var(--ink3)">'
              'This slate was predicted before the strikeout model existed. '
              'Re-run the predictor for this date to fill in the numbers.</div>')
+
+
+# ------------------------------------------------------------ game lines
+with tab_lines:
+    html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
+         'Game lines</div><div style="color:var(--ink3);font-size:12.5px;'
+         'margin-bottom:14px">Who wins, by how much, and who does the '
+         'scoring. Built by adding up the same hitters shown on every '
+         'other tab — no separate team model to disagree with them.</div>')
+
+    games_path = os.path.join(CACHE_DIR, f"teams_{slate_date}.csv")
+    games_df = None
+    if os.path.exists(games_path):
+        try:
+            games_df = pd.read_csv(games_path)
+        except Exception:
+            games_df = None
+
+    if games_df is None or games_df.empty:
+        html('<div class="sp-empty">No game predictions for this slate.<br>'
+             '<span style="color:var(--ink3);font-size:12px">'
+             'Written by <code>predict_slate.py</code> alongside the hitter '
+             'props. A slate predicted before this tab existed will not '
+             'have them.</span></div>')
+    else:
+        if "start_time_utc" in games_df:
+            games_df["start"] = pd.to_datetime(
+                games_df["start_time_utc"], utc=True, errors="coerce"
+            ).dt.tz_convert("America/New_York")
+            games_df = games_df.sort_values("start", na_position="last")
+
+        # Who the model expects to do the scoring. exp_runs is p_run x
+        # expected_pa, written by predict_slate -- the same numbers that
+        # were summed to produce the team total above, so the three names
+        # under a card are literally the biggest terms in that card's score.
+        # An older slate file predates the column; the card still draws,
+        # just without the bottom half.
+        have_scorers = "exp_runs" in df.columns
+
+        def scorers(pk, team, n=3):
+            if not have_scorers:
+                return ""
+            side = df[(df["game_pk"] == pk) & (df["team"] == team)]
+            side = side.dropna(subset=["exp_runs"]).nlargest(n, "exp_runs")
+            if side.empty:
+                return ""
+            return " · ".join(
+                f'<b>{str(r["name"]).split()[-1] if pd.notna(r["name"]) else "?"}</b>'
+                f' {r["exp_runs"]:.2f}'
+                for _, r in side.iterrows())
+
+        cards = ""
+        for r in games_df.to_dict("records"):
+            pk = int(r["game_pk"])
+            away, home = r.get("away_team", "?"), r.get("home_team", "?")
+            ap, hp = float(r.get("away_win_prob", 0.5)), float(r.get("home_win_prob", 0.5))
+            ar, hr_ = float(r.get("away_runs", 0)), float(r.get("home_runs", 0))
+            clock = fmt_clock(r.get("start")) if "start" in r else ""
+
+            # A lineup the model could only partly fill scores low for a
+            # reason that has nothing to do with the teams. Say so on the
+            # card rather than letting it read as a projection.
+            thin = ""
+            missing = [t for t, k in ((away, "away_hitters"), (home, "home_hitters"))
+                       if pd.notna(r.get(k)) and int(r[k]) < 9]
+            if missing:
+                thin = (f'<div class="sp-thin">Lineup incomplete for '
+                        f'{" and ".join(missing)} — that side\'s runs are '
+                        f'low by roughly the missing share.</div>')
+
+            body = ""
+            if have_scorers:
+                a_s, h_s = scorers(pk, away), scorers(pk, home)
+                if a_s or h_s:
+                    body = (f'<div class="sp-sc">Expected to score'
+                            f'<div class="who">{away} &nbsp;{a_s}</div>'
+                            f'<div class="who">{home} &nbsp;{h_s}</div></div>')
+
+            cards += (
+                f'<div class="sp-gc">'
+                f'<div class="hd"><span>{away} at {home}</span>'
+                f'<span>{clock}</span></div>'
+                f'<div class="sd">'
+                f'<div><div class="tm">{away}</div>'
+                f'<div class="rn{"" if ar >= hr_ else " dim"}">{ar:.1f}</div></div>'
+                f'<div style="text-align:right"><div class="tm">{home}</div>'
+                f'<div class="rn{"" if hr_ >= ar else " dim"}">{hr_:.1f}</div></div>'
+                f'</div>'
+                f'<div class="sp-bar"><i class="a" style="width:{ap * 100:.1f}%"></i>'
+                f'<i class="h" style="width:{hp * 100:.1f}%"></i></div>'
+                f'<div class="sp-wp"><span>{away} <b>{ap:.0%}</b></span>'
+                # The flanks already carry the split the bar is showing, so
+                # the middle carries the other number people want off a
+                # game card: how many runs total.
+                f'<span style="color:var(--ink3)">{ar + hr_:.1f} total</span>'
+                f'<span><b>{hp:.0%}</b> {home}</span></div>'
+                f'{body}{thin}</div>')
+        html(f'<div class="sp-gl">{cards}</div>')
+
+        totals = games_df["home_runs"] + games_df["away_runs"]
+        edge = games_df[["home_win_prob", "away_win_prob"]].max(axis=1)
+        html(f'<div class="sp-kpi">'
+             f'<div><span class="v">{len(games_df)}</span>'
+             f'<span class="k">Games projected</span></div>'
+             f'<div><span class="v">{totals.mean():.1f}</span>'
+             f'<span class="k">Runs per game, both sides</span></div>'
+             f'<div><span class="v">{edge.max():.0%}</span>'
+             f'<span class="k">Strongest lean on the slate</span></div>'
+             f'<div><span class="v">'
+             f'{int((edge > 0.60).sum())}</span>'
+             f'<span class="k">Games leaning past 60%</span></div></div>')
+
+        html('<div style="font-size:12px;color:var(--ink3);line-height:1.6">'
+             'A projected score is the <b style="color:var(--ink2)">average</b> '
+             'of how the game goes, not a prediction of the final. The win '
+             'probability is what matters, and it is much closer to even than '
+             'the run gap looks: a team projected a full run better still '
+             'loses close to four times in ten, because baseball scoring is '
+             'lumpy — one big inning swings a game and the model knows it. '
+             'The names are the model\'s biggest expected run scorers, in '
+             'runs, and they add up to the team total above them.<br>'
+             'The starting pitcher is in these numbers through each hitter\'s '
+             'matchup; there is no separate pitcher term.</div>')
+
+
+# --------------------------------------------------- pitchers vs market
+def _render_market_block():
+    """
+    The strikeout market check, moved off the Game Lines tab.
+
+    It was there because it was the only thing there; it is a comparison
+    of PITCHER strikeout props, so it belongs under the pitchers. Kept as
+    a function so it renders at the bottom of that tab, below the props
+    it is checking, rather than above them.
+    """
+    html('<div style="font-size:15px;font-weight:640;color:var(--ink);'
+         'margin-top:26px">Against the market</div>'
+         '<div style="color:var(--ink3);font-size:12.5px;margin-bottom:14px">'
+         'The same strikeout numbers, priced against the sportsbooks. '
+         'Biggest disagreements first.</div>')
+
+    # Written by compare_market.py, which owns the name matching between
+    # the odds feed ("Ronald Acuna Jr.") and this project's tables. The
+    # dashboard reads the answer rather than redoing the join, so the two
+    # can never disagree about who a player is.
+    lines_path = os.path.join(CACHE_DIR, f"market_compare_{slate_date}.csv")
+    lines_df = None
+    if os.path.exists(lines_path):
+        try:
+            lines_df = pd.read_csv(lines_path)
+        except Exception:
+            lines_df = None
+
+    if lines_df is None or lines_df.empty:
+        html('<div class="sp-empty">No market lines for this slate.<br>'
+             '<span style="color:var(--ink3);font-size:12px">'
+             'Capture them before first pitch with '
+             '<code>python -m data.odds_lines ' + str(slate_date) + '</code>, '
+             'then run <code>python compare_market.py ' + str(slate_date) +
+             '</code>.<br>They cannot be fetched after the games.</span></div>')
+    else:
+        lines_df = lines_df.reindex(
+            lines_df["edge"].abs().sort_values(ascending=False).index)
+        n_books_total = int(lines_df["n_books"].max()) if "n_books" in lines_df else 0
+
+        rows = ""
+        for r in lines_df.to_dict("records"):
+            edge = r.get("edge")
+            # Coloured by which side the model prefers, and only once the
+            # gap is big enough to be worth a second look. Books and models
+            # differ by a point or two on noise alone.
+            if pd.isna(edge):
+                colour, label = "var(--ink3)", "—"
+            elif edge > 0.05:
+                colour, label = "var(--b4)", f"OVER by {edge:.1%}"
+            elif edge < -0.05:
+                colour, label = "var(--b1ink)", f"UNDER by {abs(edge):.1%}"
+            else:
+                colour, label = "var(--ink2)", "agree"
+            rows += (
+                f'<tr><td style="font-weight:560">{r.get("pitcher", r.get("player"))}</td>'
+                f'<td style="color:var(--ink2)">{r.get("team","")} '
+                f'<span style="color:var(--ink3)">vs {r.get("opponent","")}</span></td>'
+                f'<td style="color:var(--ink);text-align:center;'
+                f'font-weight:560">{r.get("line"):g}</td>'
+                f'<td style="text-align:center">{pct(r.get("model_prob"))}</td>'
+                f'<td style="text-align:center">{pct(r.get("market_prob"))}</td>'
+                f'<td style="color:{colour};text-align:center;font-weight:560">'
+                f'{label}</td>'
+                f'<td style="color:var(--ink3);text-align:center">'
+                f'{int(r.get("n_books", 0) or 0)}</td></tr>')
+
+        html('<table class="plain"><thead><tr><th>Pitcher</th><th>Matchup</th>'
+             '<th style="text-align:center">Line</th>'
+             '<th style="text-align:center">Model</th>'
+             '<th style="text-align:center">Market</th>'
+             '<th style="text-align:center">Disagreement</th>'
+             '<th style="text-align:center">Books</th>'
+             '</tr></thead><tbody>' + rows + '</tbody></table>')
+
+        gap = lines_df["edge"].abs().mean()
+        signed = lines_df["edge"].mean()
+        html(f'<div class="sp-kpi" style="margin-top:18px">'
+             f'<div><span class="v">{len(lines_df)}</span>'
+             f'<span class="k">Lines priced</span></div>'
+             f'<div><span class="v">{gap:.1%}</span>'
+             f'<span class="k">Average disagreement</span></div>'
+             f'<div><span class="v">{signed:+.1%}</span>'
+             f'<span class="k">Signed — model vs market</span></div>'
+             f'<div><span class="v">{n_books_total}</span>'
+             f'<span class="k">Most books on a line</span></div></div>')
+
+        note = ""
+        if abs(signed) > 0.03:
+            note = (f' The model sits systematically '
+                    f'{"above" if signed > 0 else "below"} the market, which '
+                    f'is a calibration difference rather than an edge.')
+        html(f'<div style="margin-top:6px;font-size:12px;color:var(--ink3);'
+             f'line-height:1.55">Model probabilities are read at the '
+             f'<b style="color:var(--ink2)">book\'s</b> line, not at a fixed '
+             f'5.5 — books price each pitcher differently.{note}<br>'
+             f'Agreeing with the market is not an edge; it means the model '
+             f'is reproducing public information competently. An edge is '
+             f'disagreement that turns out to be right, which only '
+             f'<code>score_slate.py</code> can tell you.</div>')
+
+
+# Re-entering a tab context appends to it. The market block has to be
+# defined before it can be called, and it is defined below the pitcher
+# tab because it used to live somewhere else -- so it is called here
+# rather than moved, which keeps the diff to the part that changed.
+with tab_pitch:
+    _render_market_block()
 
 
 # ---------------------------------------------------------- all hitters

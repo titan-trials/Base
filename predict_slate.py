@@ -79,6 +79,8 @@ from features.rbi_features import (
 from features.run_features import (
     RunScoringModel, add_lineup_obp_behind, build_run_training_frame,
 )
+from features.team_model import TeamRunModel, build_game_predictions
+from data.team_lines import get_team_lines
 from data.batting_lines import get_batting_lines
 from features.bases_features import (
     measure_bases_per_hit, expected_total_bases_per_pa,
@@ -874,6 +876,11 @@ def main(game_date: str = None):
             print(f"    slot {int(slot)}: {row['mean']:.2f} PA  "
                   f"({int(row['size'])} hitters)")
 
+    # Every run is scored by exactly one batter, so a hitter's expected runs
+    # is the atom the team projection is built from. Computed here rather
+    # than inside team_model so it can be exported alongside the props.
+    frame["exp_runs"] = frame["p_run"] * frame["expected_pa"]
+
     # ---- 8. Save ------------------------------------------------------
     out_cols = [
         # player_id is exported so score_slate.py can join predictions to
@@ -882,6 +889,12 @@ def main(game_date: str = None):
         "game_pk", "player_id", "name", "team", "opponent", "is_home", "lineup_slot",
         "lineup_status", "opposing_pitcher", "venue_name", "start_time_utc",
         "expected_pa", "batter_pa_seen", "pitcher_pa_seen",
+        # Expected runs scored by this hitter tonight: his per-plate-appearance
+        # run probability times his projected plate appearances. Summing this
+        # over a lineup IS the team's projected score -- see
+        # features/team_model.py -- so exporting it lets the dashboard show
+        # who the model expects to do the scoring without re-deriving anything.
+        "exp_runs",
         # Form marker. Written to the slate so it can be graded later, and
         # read by nothing that produces the probabilities beside it.
         "form_z", "form_state",
@@ -926,6 +939,52 @@ def main(game_date: str = None):
         pitchers_out.to_csv(p_path, index=False)
         print(f"Saved {len(pitchers_out)} pitcher props to "
               f"cache/pitchers_{game_date}.csv")
+
+    # ---- 9. Team scores and win probabilities -------------------------
+    # No new model. The hitter run model already says how often each batter
+    # scores per plate appearance and the PA model says how many he gets;
+    # added up over a lineup that IS the team's projected score. All
+    # team_model contributes is the shape around that mean, fitted to real
+    # final scores, which is what turns two projected totals into a win
+    # probability. Doing it this way means the game page can never disagree
+    # with the player page about the same game.
+    print("\n" + "=" * 60)
+    print("TEAM SCORES AND WIN PROBABILITIES")
+    print("=" * 60)
+    try:
+        team_lines = get_team_lines(START_DATE, game_date, verbose=True)
+    except Exception as exc:
+        print(f"  Could not load final scores ({exc}); using a "
+              f"league-average shape.")
+        team_lines = None
+    team_model = TeamRunModel.fit(team_lines, verbose=True)
+    games_out = build_game_predictions(frame, team_model, verbose=True)
+    if games_out.empty:
+        print("  No game had both lineups projected -- nothing written.")
+    else:
+        games_out.insert(1, "game_date", game_date)
+        games_out["predicted_at_utc"] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        g_path = cache_path(f"teams_{game_date}")
+        starts_by_game = out.groupby("game_pk")["start_time_utc"].first()
+        games_out = games_out.merge(
+            starts_by_game.rename("start_time_utc"),
+            left_on="game_pk", right_index=True, how="left")
+        # Same rule as the hitters and the pitchers: a game already underway
+        # keeps the number that was committed to before first pitch.
+        games_out = preserve_committed_rows(games_out, g_path, now_utc, force)
+        games_out = games_out.sort_values("start_time_utc",
+                                          na_position="last")
+        games_out.to_csv(g_path, index=False)
+        print(f"Saved {len(games_out)} games to cache/teams_{game_date}.csv")
+
+        print("\n  Projected scores:")
+        for _, g in games_out.iterrows():
+            fav = (g["home_team"] if g["home_win_prob"] >= 0.5
+                   else g["away_team"])
+            edge = max(g["home_win_prob"], g["away_win_prob"])
+            print(f"    {g['away_team']} {g['away_runs']:.1f} at "
+                  f"{g['home_team']} {g['home_runs']:.1f}   "
+                  f"{fav} {edge:.0%}")
 
     # What is actually IN the file, after preservation. On a re-run this is
     # the number that matters, and it will usually be smaller than the
