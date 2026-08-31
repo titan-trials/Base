@@ -1,0 +1,5 @@
+market,player,line,prob_over,hold,n_books,commence_time,home_team,away_team,game_date,fetched_at_utc
+pitcher_strikeouts,Robert Stock,3.5,0.4770335727409387,0.05852192362093356,1,2026-08-31T22:41:00Z,Tampa Bay Rays,New York Mets,2026-08-31,2026-08-30T23:45:17Z
+pitcher_strikeouts,George Kirby,4.5,0.5828822517990193,0.06079848679321764,3,2026-08-31T22:46:00Z,Boston Red Sox,Seattle Mariners,2026-08-31,2026-08-30T23:45:17Z
+pitcher_strikeouts,Payton Tolle,6.5,0.5371848068943506,0.06026689625484272,3,2026-08-31T22:46:00Z,Boston Red Sox,Seattle Mariners,2026-08-31,2026-08-30T23:45:17Z
+pitcher_strikeouts,Ian Seymour,6.5,0.44305636257989545,0.05964750250134676,1,2026-08-31T22:41:00Z,Tampa Bay Rays,New York Mets,2026-08-31,2026-08-30T23:45:17Z

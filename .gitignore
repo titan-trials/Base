@@ -53,6 +53,16 @@ cache/*
 !cache/form_log.csv
 !cache/pitcher_scoring_log.csv
 
+# Closing lines, and the head-to-head record against them.
+#
+# These are the LEAST regenerable files in the project -- more so than the
+# scoring logs, which could in principle be rebuilt from slates and
+# Statcast. Historical odds are not on the free tier, so a night whose
+# lines were not captured before first pitch can never be benchmarked, by
+# anyone, ever. A few KB a night.
+!cache/odds_*.csv
+!cache/market_log.csv
+
 # Regenerable, and the expensive part of the repo:
 #   statcast_player_*.csv    ~1.2 GB, re-pulled by predict_slate.py
 #   statcast_pitcher_*.csv   re-pulled per slate, ~30 starters at a time

@@ -154,6 +154,27 @@ div[data-testid="stTabPanel"]:has(.sp-wide)
  border:2px solid rgba(255,255,255,.85);border-top-color:transparent}
 .sp-h1{font-size:18px;font-weight:660;color:var(--ink);letter-spacing:-.01em;margin:0}
 .sp-sub{font-size:12px;color:var(--ink3);margin-top:1px}
+/* NOTE the selectors below use div, not p. Streamlit styles `.stMarkdown p`
+   with a font-size, and that beats a bare `.sp-date` class on specificity
+   -- so a <p class="sp-date"> silently renders at 16px no matter what this
+   rule asks for, while still picking up the weight and colour. The bug
+   looks like "my CSS did nothing" when in fact only one property lost.
+   The date IS the identity of this page. Every number on it belongs to
+   one specific day, and reading Tuesday's slate believing it is Monday's
+   makes all of them wrong in a way nothing else on screen would reveal.
+   So it is the headline, not a caption under one. */
+.sp-date{font-size:26px;font-weight:680;color:var(--ink);letter-spacing:-.02em;
+ margin:0;line-height:1.15}
+.sp-when{display:inline-block;padding:3px 10px;border-radius:999px;
+ font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+ vertical-align:6px;margin-left:11px;border:1px solid}
+.sp-when.now{color:var(--b4);border-color:rgba(52,211,153,.55);
+ background:rgba(52,211,153,.10)}
+.sp-when.past{color:var(--ink3);border-color:var(--line)}
+.sp-when.future{color:var(--b2);border-color:rgba(250,178,25,.5);
+ background:rgba(250,178,25,.08)}
+.sp-stale{margin-top:9px;padding:9px 13px;border-radius:9px;font-size:12.5px;
+ border:1px solid var(--line);background:var(--card);color:var(--ink2)}
 .sp-status{display:inline-flex;gap:9px;align-items:center;padding:7px 13px;
  border-radius:999px;border:1px solid var(--line);background:var(--card);
  font-size:var(--fs-meta);color:var(--ink)}
@@ -368,9 +389,53 @@ with top_r:
          f'<span style="color:var(--ink3)"> · written {fmt_dt(written)}</span>'
          f'</span></div>')
 
+def when_label(date_string):
+    """
+    (text, css class) for how tonight's slate relates to right now.
+
+    Anchored to US Eastern rather than the viewer's clock, because that is
+    the calendar baseball is scheduled on -- a 10pm Eastern game is still
+    Monday's game to someone on the west coast at 7pm, and to the
+    deployed app running in UTC it would otherwise already be Tuesday.
+    """
+    try:
+        slate = pd.Timestamp(date_string).date()
+    except Exception:
+        return "", ""
+    today = pd.Timestamp.now(tz="America/New_York").date()
+    delta = (slate - today).days
+    if delta == 0:
+        return "Today", "now"
+    if delta == -1:
+        return "Yesterday", "past"
+    if delta == 1:
+        return "Tomorrow", "future"
+    if delta < 0:
+        return f"{-delta} days ago", "past"
+    return f"in {delta} days", "future"
+
+
+_when, _when_class = when_label(slate_date)
+# Built by hand rather than with %-d, which is POSIX-only and crashes on
+# Windows -- this project has already hit that once, in fmt_clock.
+_ts = pd.Timestamp(slate_date)
+_pretty = f"{_ts.strftime('%A, %B')} {_ts.day}"
+_badge = (f'<span class="sp-when {_when_class}">{_when}</span>'
+          if _when else "")
+
 html(f'<div class="sp-head"><div class="sp-mark"></div><div>'
-     f'<p class="sp-h1">Slate props</p><div class="sp-sub">{slate_date} · '
-     f'{df["game_pk"].nunique()} games · {len(df)} hitters</div></div></div>')
+     f'<div class="sp-date">{_pretty}{_badge}</div>'
+     f'<div class="sp-sub">{slate_date} · {df["game_pk"].nunique()} games · '
+     f'{len(df)} hitters</div></div></div>')
+
+# Looking at an old slate is a legitimate thing to do and a very easy
+# thing to do by accident, since the picker defaults to the newest file
+# and the newest file is not necessarily today's. Say so plainly rather
+# than letting yesterday's probabilities read as tonight's.
+if _when_class == "past":
+    html(f'<div class="sp-stale">These games have already been played. '
+         f'You are looking at what the model said before '
+         f'{_when.lower()}\'s slate, not at tonight\'s.</div>')
 
 tab_slate, tab_games, tab_pitch, tab_all, tab_res = st.tabs(
     ["Slate", "Games", "Pitchers", "All hitters", "Results"])
@@ -568,7 +633,28 @@ with tab_pitch:
         except Exception:
             pit = None
 
+    # The book's line, when compare_market.py has been run for this date.
+    #
+    # Read from the file that script writes rather than joining the odds
+    # feed here. The join needs accent-stripping and suffix handling, and
+    # a second copy of that logic living in the dashboard is how the two
+    # quietly disagree about who "Ronald Acuna Jr." is. compare_market
+    # owns the matching; this just displays the answer.
+    #
+    # It also keeps this file's no-project-imports rule intact, which is
+    # what lets the deployed app run on three packages.
+    mkt = None
+    mkt_path = os.path.join(CACHE_DIR, f"market_compare_{slate_date}.csv")
+    if os.path.exists(mkt_path):
+        try:
+            mkt = pd.read_csv(mkt_path)[
+                ["pitcher", "line", "model_prob", "market_prob", "edge"]]
+        except Exception:
+            mkt = None
+
     if pit is not None and not pit.empty and "prob_k_over_5.5" in pit.columns:
+        if mkt is not None and not mkt.empty:
+            pit = pit.merge(mkt, on="pitcher", how="left")
         pit = pit.sort_values("expected_k", ascending=False)
         # k_cuts, NOT cuts. This is a flat script: Streamlit runs it top to
         # bottom every rerun, so every `with tab_x:` block shares one
@@ -581,6 +667,39 @@ with tab_pitch:
         # inside a tab block gets a name that could only belong to it.
         k_cuts = {c: [float(pit[c].quantile(q)) for q in (.25, .50, .75)]
                   for c in ("prob_k_over_5.5", "prob_k_over_6.5")}
+
+        has_market = "market_prob" in pit.columns and pit["market_prob"].notna().any()
+
+        def market_cells(r):
+            """
+            The book's line, the model read AT that line, and the gap.
+
+            Blank when no book quoted this pitcher, which is most of them
+            on a slate fetched early. An empty cell is the honest render:
+            filling it with the model's 5.5 number beside a market price
+            for some other line would be comparing two different questions.
+            """
+            if not has_market:
+                return ''
+            line, mp, kp = r.get("line"), r.get("market_prob"), r.get("model_prob")
+            if pd.isna(line) or pd.isna(mp) or pd.isna(kp):
+                return ('<td colspan="4" style="color:var(--ink3);'
+                        'text-align:center;font-size:12px">no line posted</td>')
+            edge = kp - mp
+            # Green where the model is higher, red lower. This is a
+            # DISAGREEMENT, not a recommendation -- on four pitchers the
+            # model and the market agreed to within 2.3 points, and a gap
+            # is a question about what one of them knows, not a bet.
+            colour = ("var(--b4)" if edge > 0.03 else
+                      "var(--b1ink)" if edge < -0.03 else "var(--ink2)")
+            return (f'<td style="color:var(--ink);text-align:center;'
+                    f'font-weight:560">{line:g}</td>'
+                    f'<td style="color:var(--ink2);text-align:center">'
+                    f'{pct(kp)}</td>'
+                    f'<td style="color:var(--ink2);text-align:center">'
+                    f'{pct(mp)}</td>'
+                    f'<td style="color:{colour};text-align:center;'
+                    f'font-weight:560">{edge:+.1%}</td>')
 
         def kcell(value, col):
             band = band_of(value, k_cuts[col])
@@ -613,13 +732,20 @@ with tab_pitch:
                 f'font-weight:560">{r["expected_k"]:.1f}</td>'
                 + kcell(r.get("prob_k_over_5.5"), "prob_k_over_5.5")
                 + kcell(r.get("prob_k_over_6.5"), "prob_k_over_6.5")
+                + market_cells(r)
                 + '</tr>')
+        market_head = ('<th style="text-align:center">Book line</th>'
+                       '<th style="text-align:center">Model</th>'
+                       '<th style="text-align:center">Market</th>'
+                       '<th style="text-align:center">Edge</th>'
+                       if has_market else '')
         html('<table class="plain"><thead><tr><th>Pitcher</th><th>Team</th>'
              '<th>Opponent</th><th style="text-align:center">Starts</th>'
              '<th style="text-align:center">Batters faced</th>'
              '<th style="text-align:center">Expected K</th>'
              '<th style="text-align:center">Over 5.5 K</th>'
              '<th style="text-align:center">Over 6.5 K</th>'
+             + market_head +
              '</tr></thead><tbody>' + rows + '</tbody></table>')
         thin_n = int((pit["starts_seen"] < 5).sum()) if "starts_seen" in pit else 0
         note = (f' · {thin_n} marked * have under five starts of history, so '

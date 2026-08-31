@@ -59,6 +59,7 @@ from data.refresh import refresh_players
 from features.pa_table import build_pa_table, build_game_totals
 from data.batting_lines import get_batting_lines
 from data.pitching_lines import get_pitching_lines
+from compare_market import score_against_market
 from features.run_features import build_run_training_frame
 from model.hr_v4 import evaluate, bootstrap_brier_skill, reliability_by_quantile
 
@@ -385,6 +386,15 @@ def score_pitchers(game_date: str):
           f"and +0.0765 (over 6.5).")
     print(f"  If live settles well below that, the backtest was optimistic "
           f"and it is worth knowing.")
+    # Against the closing line, on the same starters. The only
+    # benchmark that answers "is this good" rather than "is this
+    # better than nothing". Silently does nothing if no odds were
+    # captured for this date -- they cannot be fetched afterwards.
+    try:
+        score_against_market(game_date, basis)
+    except Exception as exc:
+        print(f"\n  Market comparison skipped: {exc}")
+
     print(f"\n  Log: cache/{PITCHER_LOG_KEY}.csv")
     return running
 

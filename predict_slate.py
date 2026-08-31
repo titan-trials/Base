@@ -178,6 +178,17 @@ def build_pitcher_props(frame, starters, game_date):
         }
         for line in K_LINES:
             row[f"prob_k_over_{line}"] = prob_over(dist, line)
+        # The whole distribution, not just the two lines above.
+        #
+        # Sportsbooks set a line per pitcher, and they are all over the
+        # place -- 3.5 for a spot starter, 6.5 for an ace. Storing only
+        # 5.5 and 6.5 means most of the market cannot be compared against
+        # at all, and comparing an ace's 6.5 model number against his 8.5
+        # market line would be worse than not comparing.
+        #
+        # Twenty-odd numbers per pitcher, fourteen pitchers a night. The
+        # storage is nothing and it makes every line answerable.
+        row["k_dist"] = ",".join(f"{p:.6f}" for p in dist)
         rows.append(row)
 
     if not rows:
