@@ -406,6 +406,139 @@ if not props:
     st.stop()
 cuts = {k: [float(df[k].quantile(q)) for q in (.25, .50, .75)] for k in props}
 
+# ---------------------------------------------------------------- picks
+#
+# The saved-hitter list, held in the URL rather than in a file.
+#
+# A file was the obvious choice and is the wrong one: the deployed app is
+# ONE process serving everybody, so a file would be a single global list.
+# Two people looking at the site would overwrite each other's picks and
+# neither would understand why. The URL is per-viewer for free, survives a
+# refresh, and makes the list shareable as a side effect -- send someone
+# the address and they see your eight.
+#
+# Stored as player_id, not row position. Row positions are meaningless the
+# moment the slate changes or the search box filters anything.
+MAX_PICKS = 8
+PICKS_PARAM = "picks"
+
+if "sp_picks" not in st.session_state:
+    raw = st.query_params.get(PICKS_PARAM, "")
+    # Truncated here rather than trusting the table to do it. A hand-edited
+    # or stale link can carry any number of ids, and the enforcement in the
+    # editor only runs when the editor does -- filter the search box down to
+    # nothing and it does not.
+    st.session_state.sp_picks = [
+        int(x) for x in str(raw).split(",")
+        if x.strip().lstrip("-").isdigit()][:MAX_PICKS]
+
+
+def _write_picks(picks):
+    """Session state and the URL, kept in step."""
+    st.session_state.sp_picks = list(picks)
+    if picks:
+        st.query_params[PICKS_PARAM] = ",".join(str(p) for p in picks)
+    elif PICKS_PARAM in st.query_params:
+        del st.query_params[PICKS_PARAM]
+
+
+def render_picks_panel(frame, prop_map, band_cuts):
+    """
+    The saved hitters, in Streamlit's own sidebar.
+
+    The sidebar rather than a floating div because it already IS what was
+    asked for -- a panel with an arrow that collapses it, present on every
+    tab. A custom overlay would look the same and could not write back to
+    Python, so a tick inside it would do nothing.
+
+    Each hitter collapses to a line. Eight hitters times fourteen props is
+    over a hundred numbers, which is a wall if it is all open at once and
+    is exactly what an expander is for.
+    """
+    side = st.sidebar
+    picks = list(st.session_state.sp_picks)
+
+    side.markdown(
+        f'<div style="font-size:14px;font-weight:640;color:var(--ink)">'
+        f'My team</div>'
+        f'<div style="font-size:12px;color:var(--ink3);margin-bottom:10px">'
+        f'{len(picks)} of {MAX_PICKS} · tick <b>Save</b> on the All hitters '
+        f'tab</div>', unsafe_allow_html=True)
+
+    if st.session_state.pop("sp_full_msg", False):
+        side.warning(f"Full at {MAX_PICKS}. Remove someone first.")
+
+    if not picks:
+        side.markdown(
+            '<div style="font-size:12px;color:var(--ink3);line-height:1.6">'
+            'Nobody saved yet. Your list is kept in the page address, so it '
+            'survives a refresh and you can send the link to someone.</div>',
+            unsafe_allow_html=True)
+        return
+
+    by_id = (frame.set_index("player_id") if "player_id" in frame.columns
+             else frame)
+    missing = 0
+    for pid in picks:
+        if pid not in by_id.index:
+            missing += 1
+            continue
+        r = by_id.loc[pid]
+        if isinstance(r, pd.DataFrame):      # duplicate ids -- take one
+            r = r.iloc[0]
+        title = f'{r.get("name", pid)} · {r.get("team", "")}'
+        with side.expander(title):
+            # Built as a list rather than nested inside one f-string:
+            # quoting a dict key with the same quote character as the
+            # surrounding f-string is a SyntaxError before Python 3.12, and
+            # this file has to run on whatever the deploy host provides.
+            bits = [f'vs {r.get("opposing_pitcher", "?")}']
+            slot = r.get("lineup_slot")
+            if pd.notna(slot):
+                bits.append(f"bats {ORDINAL.get(int(slot), int(slot))}")
+            pa = r.get("expected_pa")
+            if pd.notna(pa):
+                bits.append(f"{float(pa):.2f} PA")
+            st.markdown(
+                f'<div style="font-size:11.5px;color:var(--ink3);'
+                f'margin-bottom:6px">{" · ".join(bits)}</div>',
+                unsafe_allow_html=True)
+            # Every prop the slate carries, coloured on the same slate-wide
+            # quartiles as the big table so a number means the same thing
+            # in both places.
+            cells = ""
+            for key, (label, _fam) in prop_map.items():
+                value = r.get(key)
+                if pd.isna(value):
+                    continue
+                b = band_of(value, band_cuts[key])
+                colour = BANDS[b][1] if b else "var(--ink2)"
+                cells += (
+                    f'<div style="display:flex;justify-content:space-between;'
+                    f'gap:8px;padding:2px 0;font-size:12px">'
+                    f'<span style="color:var(--ink3)">{label}</span>'
+                    f'<b style="color:{colour};font-variant-numeric:tabular-nums">'
+                    f'{pct(value)}</b></div>')
+            st.markdown(cells, unsafe_allow_html=True)
+            if st.button("Remove", key=f"sp_rm_{pid}",
+                         width="stretch"):
+                _write_picks([p for p in picks if p != pid])
+                st.session_state.sp_grid_nonce += 1
+                st.rerun()
+
+    if missing:
+        side.markdown(
+            f'<div style="font-size:11.5px;color:var(--warn);margin-top:8px">'
+            f'{missing} saved hitter{"" if missing == 1 else "s"} '
+            f'{"is" if missing == 1 else "are"} not on this slate. Still in '
+            f'your link — they will reappear on a slate they play.</div>',
+            unsafe_allow_html=True)
+
+    if side.button("Clear all", width="stretch"):
+        _write_picks([])
+        st.session_state.sp_grid_nonce += 1
+        st.rerun()
+
 confirmed = int((df.get("lineup_status") == "confirmed").sum())
 projected = int((df.get("lineup_status") == "projected").sum())
 written = pd.Timestamp(os.path.getmtime(path), unit="s", tz="UTC") \
@@ -584,7 +717,7 @@ with tab_games:
             label = (f'{dot} {away.iloc[0] if len(away) else "?"} @ '
                      f'{home.iloc[0] if len(home) else "?"}  '
                      f'{fmt_clock(gg["start"].iloc[0])}')
-            col.button(label, key=f"sp_g{pk}", use_container_width=True,
+            col.button(label, key=f"sp_g{pk}", width="stretch",
                        on_click=pick_game, args=(pk,),
                        type="primary" if pk == st.session_state.sp_game
                        else "secondary")
@@ -1025,6 +1158,10 @@ with tab_all:
 
     base = [c for c in BASE_LABELS if c in df.columns]
     view = df[base + list(props)].copy()
+    # Index by player_id so a tick resolves to a PLAYER, not to "row 14 of
+    # whatever is currently on screen". hide_index keeps it off the page.
+    if "player_id" in df.columns:
+        view.index = pd.Index(df["player_id"], name="player_id")
 
     if query.strip():
         # Plain substring, regex=False. A hitter's name is not a pattern,
@@ -1066,6 +1203,15 @@ with tab_all:
                     out.append(f"background-color:{bg};color:{ink}")
             return out
 
+        # The Save column goes in BEFORE styling, and gets no style of its
+        # own. st.data_editor applies pandas.Styler colours to columns that
+        # are non-editable -- which is every column here except this one --
+        # so the checkbox and the green/yellow/red banding coexist. That is
+        # not obvious from the API and is the reason this tab did not have
+        # to give anything up to gain a checkbox.
+        view.insert(0, "Save", [i in st.session_state.sp_picks
+                                for i in view.index])
+
         styled = view.style
         for lab in prop_labels:
             styled = styled.apply(band_fill, column_cuts=cuts_of[lab],
@@ -1085,6 +1231,10 @@ with tab_all:
         # batting slot -- and those wasted pixels are exactly what pushed
         # Walk off the right edge on a 1440px screen.
         config = {
+            "Save": st.column_config.CheckboxColumn(
+                "Save", width=52, pinned=True,
+                help=f"Tick to add this hitter to your team in the left "
+                     f"panel. Up to {MAX_PICKS}."),
             # Pinned, so the name stays put if the table does end up
             # scrolling on a narrow window.
             "Hitter": st.column_config.Column(pinned=True, width=170),
@@ -1111,8 +1261,51 @@ with tab_all:
             if lab in view.columns:
                 config[lab] = st.column_config.Column(help=PROP_HELP.get(key))
 
-        st.dataframe(styled, use_container_width=True, hide_index=True,
-                     height=620, column_config=config)
+        # The widget key carries the slate AND the search text on purpose.
+        #
+        # st.data_editor stores a user's edits keyed by ROW POSITION, not by
+        # index. Type into the search box and row 3 becomes a different
+        # hitter, so a stale edit would silently tick the wrong man. Making
+        # the key change with the row set throws that state away whenever it
+        # could go stale. Nothing is lost: the ticks live in sp_picks and are
+        # rebuilt into the Save column above on every run.
+        #
+        # The nonce on the end is how a refused tick gets un-ticked. A
+        # widget's stored edits cannot be deleted while it exists, so the
+        # move is to change the key -- that builds a NEW editor whose Save
+        # column comes straight from sp_picks, and the orphaned state is
+        # collected. Without it, ticking a ninth hitter would leave a box
+        # ticked for a hitter who is not on the list, which is the worst
+        # kind of bug: the screen disagreeing with the data.
+        st.session_state.setdefault("sp_grid_nonce", 0)
+        editor_key = (f"sp_grid_{slate_date}_{query.strip().lower()}"
+                      f"_{st.session_state.sp_grid_nonce}")
+        edited = st.data_editor(
+            styled, width="stretch", hide_index=True, height=620,
+            column_config=config, num_rows="fixed",
+            disabled=[c for c in view.columns if c != "Save"],
+            key=editor_key)
+
+        ticked = [int(i) for i in edited.index[edited["Save"].fillna(False)]]
+        previous = list(st.session_state.sp_picks)
+        # Hitters filtered out by the search box are not on screen and so
+        # cannot have been unticked -- they must survive the round trip.
+        off_screen = [p for p in previous if p not in set(view.index)]
+        kept = [p for p in previous if p in ticked]
+        added = [p for p in ticked if p not in previous]
+        picks = off_screen + kept + added
+
+        # Over the cap, the NEWEST tick is the one refused. Dropping an
+        # earlier pick instead would mean a click quietly deleting a hitter
+        # somewhere off screen.
+        overflow = picks[MAX_PICKS:]
+        picks = picks[:MAX_PICKS]
+        if picks != previous:
+            _write_picks(picks)
+        if overflow:
+            st.session_state.sp_grid_nonce += 1
+            st.session_state.sp_full_msg = True
+            st.rerun()
 
         shown = len(view)
         html(f'<div style="margin-top:8px;font-size:12px;color:var(--ink3)">'
@@ -1125,6 +1318,12 @@ with tab_all:
              f'Hover any column header for what it means. Dragging a header '
              f'moves that column — reload the page to put them back in '
              f'order.</div>')
+
+# Outside the tab block on purpose. st.sidebar writes to its own container
+# wherever it is called, and every tab body runs on every rerun, so this
+# renders whichever tab is on screen. Placed after the editor so it shows
+# the ticks from THIS run rather than the previous one.
+render_picks_panel(df, props, cuts)
 
 
 # -------------------------------------------------------------- results
