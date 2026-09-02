@@ -1,34 +1,6 @@
 market,player,line,prob_over,hold,n_books,commence_time,home_team,away_team,game_date,fetched_at_utc
-pitcher_strikeouts,Troy Melton,3.5,0.5962094346932086,0.05834673731352691,1,2026-09-01T23:41:00Z,Minnesota Twins,Detroit Tigers,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Gabriel Hughes,3.5,0.5893794380981784,0.05884275907159209,1,2026-09-02T00:41:00Z,Colorado Rockies,Baltimore Orioles,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,AJ Smith-Shawver,3.5,0.5834970530451867,0.06708595387840655,1,2026-09-01T22:46:00Z,Washington Nationals,Atlanta Braves,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Robert Gasser,3.5,0.5773617769660688,0.06665026764141624,4,2026-09-01T23:41:00Z,Chicago Cubs,Milwaukee Brewers,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Eric Lauer,3.5,0.5504206655531736,0.06576158790909759,6,2026-09-02T02:11:00Z,Los Angeles Dodgers,St. Louis Cardinals,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Randy Dobnak,3.5,0.4836900802680604,0.06621799609604484,6,2026-09-01T23:41:00Z,Kansas City Royals,Miami Marlins,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Tyler Phillips,3.5,0.4533843307999802,0.06347040280039185,6,2026-09-01T23:41:00Z,Kansas City Royals,Miami Marlins,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Randy Vasquez,3.5,0.44098480655585515,0.06462526847997552,5,2026-09-01T22:41:00Z,Cincinnati Reds,San Diego Padres,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Michael McGreevy,3.5,0.41595275702466455,0.065060675339074,6,2026-09-02T02:11:00Z,Los Angeles Dodgers,St. Louis Cardinals,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Logan Webb,4.5,0.5947586351195875,0.06622685688641883,4,2026-09-01T22:41:00Z,Pittsburgh Pirates,San Francisco Giants,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Freddy Peralta,4.5,0.56575682382134,0.06613756613756605,5,2026-09-01T22:41:00Z,Tampa Bay Rays,New York Mets,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Kyle Bradish,4.5,0.5443504069651232,0.066347526664987,6,2026-09-02T00:41:00Z,Colorado Rockies,Baltimore Orioles,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Bryan Woo,4.5,0.5238589211618258,0.06521739130434767,5,2026-09-01T22:46:00Z,Boston Red Sox,Seattle Mariners,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Ronel Blanco,4.5,0.5,0.06310338774793767,5,2026-09-02T00:11:00Z,Houston Astros,Chicago White Sox,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Sean Manaea,4.5,0.5,0.06509392747924858,5,2026-09-01T22:41:00Z,Tampa Bay Rays,New York Mets,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Nick Lodolo,4.5,0.4710743801652893,0.0644218606882716,5,2026-09-01T22:41:00Z,Cincinnati Reds,San Diego Padres,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Jake Irvin,4.5,0.44098480655585515,0.06462526847997552,5,2026-09-01T22:46:00Z,Washington Nationals,Atlanta Braves,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Troy Melton,4.5,0.4350851927391771,0.06506554399923403,4,2026-09-01T23:41:00Z,Minnesota Twins,Detroit Tigers,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Eduardo Rodriguez,4.5,0.4278680620738836,0.0674724394293853,6,2026-09-02T01:41:00Z,Arizona Diamondbacks,Philadelphia Phillies,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,AJ Smith-Shawver,4.5,0.42723631508678234,0.0603318250377074,3,2026-09-01T22:46:00Z,Washington Nationals,Atlanta Braves,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Matthew Boyd,4.5,0.42492992238290805,0.0674724394293853,6,2026-09-01T23:41:00Z,Chicago Cubs,Milwaukee Brewers,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Robert Gasser,4.5,0.41876581121067935,0.06370706960329597,2,2026-09-01T23:41:00Z,Chicago Cubs,Milwaukee Brewers,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Gabriel Hughes,4.5,0.4165029469548134,0.06708595387840655,5,2026-09-02T00:41:00Z,Colorado Rockies,Baltimore Orioles,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Jesus Luzardo,5.5,0.5655951346655083,0.06613756613756605,5,2026-09-02T01:41:00Z,Arizona Diamondbacks,Philadelphia Phillies,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Sean Burke,5.5,0.4693877551020409,0.06389107096098456,5,2026-09-02T00:11:00Z,Houston Astros,Chicago White Sox,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Grayson Rodriguez,5.5,0.46814901356401273,0.06521739130434767,6,2026-09-02T01:39:00Z,Los Angeles Angels,New York Yankees,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Logan Webb,5.5,0.43085761181780885,0.05979560774081305,1,2026-09-01T22:41:00Z,Pittsburgh Pirates,San Francisco Giants,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Bryan Woo,5.5,0.3587443946188341,0.07211538461538458,1,2026-09-01T22:46:00Z,Boston Red Sox,Seattle Mariners,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Gerrit Cole,6.5,0.49845233182005777,0.06546814261473022,6,2026-09-02T01:39:00Z,Los Angeles Angels,New York Yankees,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,MacKenzie Gore,6.5,0.4669102720259846,0.06350985336695625,5,2026-09-02T00:06:00Z,Texas Rangers,Athletics,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Gavin Williams,6.5,0.44124516888505483,0.06576853212565503,6,2026-09-01T22:41:00Z,Cleveland Guardians,Toronto Blue Jays,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Paul Skenes,6.5,0.43668122270742354,0.06392045454545459,5,2026-09-01T22:41:00Z,Pittsburgh Pirates,San Francisco Giants,2026-09-01,2026-09-01T19:31:46Z
-pitcher_strikeouts,Jesus Luzardo,6.5,0.4248366013071895,0.06993006993007,1,2026-09-02T01:41:00Z,Arizona Diamondbacks,Philadelphia Phillies,2026-09-01,2026-09-01T19:31:46Z
+pitcher_strikeouts,Michael McGreevy,3.5,0.5463854573195004,0.07538991206238599,2,2026-09-02T02:11:00Z,Los Angeles Dodgers,St. Louis Cardinals,2026-09-01,2026-09-02T02:35:15Z
+pitcher_strikeouts,Eduardo Rodriguez,3.5,0.3959708232025009,0.07465472191116085,1,2026-09-02T01:41:00Z,Arizona Diamondbacks,Philadelphia Phillies,2026-09-01,2026-09-02T02:35:15Z
+pitcher_strikeouts,Gerrit Cole,5.5,0.6112600536193029,0.07183908045977017,1,2026-09-02T01:39:00Z,Los Angeles Angels,New York Yankees,2026-09-01,2026-09-02T02:35:15Z
+pitcher_strikeouts,Grayson Rodriguez,5.5,0.5048923679060665,0.08033826638477803,1,2026-09-02T01:39:00Z,Los Angeles Angels,New York Yankees,2026-09-01,2026-09-02T02:35:15Z
+pitcher_strikeouts,Jesus Luzardo,7.5,0.5246062992125985,0.0774125132555672,1,2026-09-02T01:41:00Z,Arizona Diamondbacks,Philadelphia Phillies,2026-09-01,2026-09-02T02:35:15Z
