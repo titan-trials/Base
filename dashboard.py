@@ -476,50 +476,60 @@ def render_picks_panel(frame, prop_map, band_cuts):
             unsafe_allow_html=True)
         return
 
-    by_id = (frame.set_index("player_id") if "player_id" in frame.columns
-             else frame)
+    key_col = "player_id" if "player_id" in frame.columns else None
     missing = 0
     for pid in picks:
-        if pid not in by_id.index:
+        rows = (frame[frame[key_col] == pid] if key_col
+                else frame.loc[frame.index == pid])
+        if rows.empty:
             missing += 1
             continue
-        r = by_id.loc[pid]
-        if isinstance(r, pd.DataFrame):      # duplicate ids -- take one
-            r = r.iloc[0]
-        title = f'{r.get("name", pid)} · {r.get("team", "")}'
+        first = rows.iloc[0]
+        # A doubleheader means two rows for one man, against two different
+        # starters, with two different sets of numbers. Both are shown --
+        # picking the first would quietly hide half of his night.
+        title = f'{first.get("name", pid)} · {first.get("team", "")}'
+        if len(rows) > 1:
+            title += f' ({len(rows)} games)'
         with side.expander(title):
-            # Built as a list rather than nested inside one f-string:
-            # quoting a dict key with the same quote character as the
-            # surrounding f-string is a SyntaxError before Python 3.12, and
-            # this file has to run on whatever the deploy host provides.
-            bits = [f'vs {r.get("opposing_pitcher", "?")}']
-            slot = r.get("lineup_slot")
-            if pd.notna(slot):
-                bits.append(f"bats {ORDINAL.get(int(slot), int(slot))}")
-            pa = r.get("expected_pa")
-            if pd.notna(pa):
-                bits.append(f"{float(pa):.2f} PA")
-            st.markdown(
-                f'<div style="font-size:11.5px;color:var(--ink3);'
-                f'margin-bottom:6px">{" · ".join(bits)}</div>',
-                unsafe_allow_html=True)
-            # Every prop the slate carries, coloured on the same slate-wide
-            # quartiles as the big table so a number means the same thing
-            # in both places.
-            cells = ""
-            for key, (label, _fam) in prop_map.items():
-                value = r.get(key)
-                if pd.isna(value):
-                    continue
-                b = band_of(value, band_cuts[key])
-                colour = BANDS[b][1] if b else "var(--ink2)"
-                cells += (
-                    f'<div style="display:flex;justify-content:space-between;'
-                    f'gap:8px;padding:2px 0;font-size:12px">'
-                    f'<span style="color:var(--ink3)">{label}</span>'
-                    f'<b style="color:{colour};font-variant-numeric:tabular-nums">'
-                    f'{pct(value)}</b></div>')
-            st.markdown(cells, unsafe_allow_html=True)
+            for n, (_, r) in enumerate(rows.iterrows()):
+                # Built as a list rather than nested inside one f-string:
+                # quoting a dict key with the same quote character as the
+                # surrounding f-string is a SyntaxError before Python 3.12,
+                # and this file runs on whatever the deploy host provides.
+                bits = [f'vs {r.get("opposing_pitcher", "?")}']
+                slot = r.get("lineup_slot")
+                if pd.notna(slot):
+                    bits.append(f"bats {ORDINAL.get(int(slot), int(slot))}")
+                pa = r.get("expected_pa")
+                if pd.notna(pa):
+                    bits.append(f"{float(pa):.2f} PA")
+                rule = ("border-top:1px solid var(--line);padding-top:7px;"
+                        "margin-top:9px;" if n else "")
+                head = f"Game {n + 1} · " if len(rows) > 1 else ""
+                st.markdown(
+                    f'<div style="{rule}font-size:11.5px;color:var(--ink3);'
+                    f'margin-bottom:6px">{head}{" · ".join(bits)}</div>',
+                    unsafe_allow_html=True)
+                # Every prop the slate carries, coloured on the same
+                # slate-wide quartiles as the big table so a number means
+                # the same thing in both places.
+                cells = ""
+                for key, (label, _fam) in prop_map.items():
+                    value = r.get(key)
+                    if pd.isna(value):
+                        continue
+                    b = band_of(value, band_cuts[key])
+                    colour = BANDS[b][1] if b else "var(--ink2)"
+                    cells += (
+                        f'<div style="display:flex;'
+                        f'justify-content:space-between;gap:8px;'
+                        f'padding:2px 0;font-size:12px">'
+                        f'<span style="color:var(--ink3)">{label}</span>'
+                        f'<b style="color:{colour};'
+                        f'font-variant-numeric:tabular-nums">'
+                        f'{pct(value)}</b></div>')
+                st.markdown(cells, unsafe_allow_html=True)
             if st.button("Remove", key=f"sp_rm_{pid}",
                          width="stretch"):
                 _write_picks([p for p in picks if p != pid])
@@ -1158,10 +1168,16 @@ with tab_all:
 
     base = [c for c in BASE_LABELS if c in df.columns]
     view = df[base + list(props)].copy()
-    # Index by player_id so a tick resolves to a PLAYER, not to "row 14 of
-    # whatever is currently on screen". hide_index keeps it off the page.
-    if "player_id" in df.columns:
-        view.index = pd.Index(df["player_id"], name="player_id")
+    # A tick has to resolve to a PLAYER, not to "row 14 of whatever is on
+    # screen". The obvious way to do that is to put player_id on the index
+    # -- and it is wrong: on a doubleheader a player has TWO rows, the
+    # index is no longer unique, and pandas refuses to style a frame with a
+    # non-unique index at all. The table dies, not just the checkbox.
+    #
+    # So the frame keeps its unique row index and player_id travels
+    # alongside it. Everything below maps through this.
+    row_pid = (df["player_id"] if "player_id" in df.columns
+               else pd.Series(df.index, index=df.index))
 
     if query.strip():
         # Plain substring, regex=False. A hitter's name is not a pattern,
@@ -1209,8 +1225,9 @@ with tab_all:
         # so the checkbox and the green/yellow/red banding coexist. That is
         # not obvious from the API and is the reason this tab did not have
         # to give anything up to gain a checkbox.
-        view.insert(0, "Save", [i in st.session_state.sp_picks
-                                for i in view.index])
+        view_pid = row_pid.reindex(view.index)
+        view.insert(0, "Save",
+                    view_pid.isin(st.session_state.sp_picks).to_numpy())
 
         styled = view.style
         for lab in prop_labels:
@@ -1286,11 +1303,16 @@ with tab_all:
             disabled=[c for c in view.columns if c != "Save"],
             key=editor_key)
 
-        ticked = [int(i) for i in edited.index[edited["Save"].fillna(False)]]
+        # dict.fromkeys rather than set(): a doubleheader player is ticked
+        # on both his rows and must come back once, in table order.
+        edited_pid = row_pid.reindex(edited.index)
+        ticked = list(dict.fromkeys(
+            int(p) for p in edited_pid[edited["Save"].fillna(False).to_numpy()]))
         previous = list(st.session_state.sp_picks)
         # Hitters filtered out by the search box are not on screen and so
         # cannot have been unticked -- they must survive the round trip.
-        off_screen = [p for p in previous if p not in set(view.index)]
+        on_screen = set(view_pid)
+        off_screen = [p for p in previous if p not in on_screen]
         kept = [p for p in previous if p in ticked]
         added = [p for p in ticked if p not in previous]
         picks = off_screen + kept + added
