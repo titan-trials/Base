@@ -1,0 +1,25 @@
+market,player,line,prob_over,hold,n_books,commence_time,home_team,away_team,game_date,fetched_at_utc
+pitcher_strikeouts,Andre Pallante,2.5,0.5997896704837579,0.05876530990968698,1,2026-09-05T00:41:00Z,Colorado Rockies,St. Louis Cardinals,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Keider Montero,2.5,0.5649363129662957,0.059223067384746475,1,2026-09-04T18:11:00Z,Cleveland Guardians,Detroit Tigers,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Matt Wilkinson,3.5,0.5893794380981784,0.05884275907159209,1,2026-09-04T23:11:00Z,New York Mets,San Francisco Giants,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Rhett Lowder,3.5,0.5633187772925764,0.060175479462691195,3,2026-09-04T22:11:00Z,Cincinnati Reds,Milwaukee Brewers,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Kumar Rocker,3.5,0.5429828117258607,0.059656690182536165,2,2026-09-05T00:06:00Z,Texas Rangers,Tampa Bay Rays,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Ryan Feltner,3.5,0.5238589211618258,0.060506050605060535,1,2026-09-05T00:41:00Z,Colorado Rockies,St. Louis Cardinals,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Ryan Johnson,3.5,0.4876536759178418,0.06464086075736553,2,2026-09-04T22:46:00Z,Pittsburgh Pirates,Los Angeles Angels,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Logan Allen,3.5,0.43619928526382173,0.06135653726015167,1,2026-09-04T18:11:00Z,Cleveland Guardians,Detroit Tigers,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Janson Junk,3.5,0.4349783929828279,0.06191593770002135,2,2026-09-04T23:10:00Z,Miami Marlins,Chicago Cubs,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Nick Martinez,3.5,0.4151739715962931,0.06344728315929893,2,2026-09-05T00:06:00Z,Texas Rangers,Tampa Bay Rays,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Erick Fedde,3.5,0.40847201210287437,0.06066411238825031,3,2026-09-04T23:41:00Z,Chicago White Sox,Minnesota Twins,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Shane Baz,4.5,0.5776531233216964,0.062065738060172015,4,2026-09-04T23:06:00Z,Baltimore Orioles,Boston Red Sox,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Max Fried,4.5,0.5318509864359873,0.0627421437795952,2,2026-09-05T01:41:00Z,San Diego Padres,New York Yankees,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Walker Buehler,4.5,0.4979222937876584,0.06535875675079905,2,2026-09-05T01:41:00Z,San Diego Padres,New York Yankees,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Cristian Javier,4.5,0.4291044776119403,0.059288537549406994,1,2026-09-05T00:11:00Z,Houston Astros,Arizona Diamondbacks,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Merrill Kelly,4.5,0.4193548387096774,0.05982905982905984,1,2026-09-05T00:11:00Z,Houston Astros,Arizona Diamondbacks,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Zebby Matthews,4.5,0.4171177482009807,0.06083121510352174,3,2026-09-04T23:41:00Z,Chicago White Sox,Minnesota Twins,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Jared Jones,5.5,0.5220817448448722,0.06412836405591782,2,2026-09-04T22:46:00Z,Pittsburgh Pirates,Los Angeles Angels,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Nolan McLean,5.5,0.5166631951676735,0.059706434168414146,1,2026-09-04T23:11:00Z,New York Mets,San Francisco Giants,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Ranger Suarez,5.5,0.46507007865598715,0.06184659216852162,4,2026-09-04T23:06:00Z,Baltimore Orioles,Boston Red Sox,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Shane Drohan,5.5,0.43668122270742354,0.05982545045045051,3,2026-09-04T22:11:00Z,Cincinnati Reds,Milwaukee Brewers,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Shota Imanaga,5.5,0.42323017148638337,0.06438087106691759,2,2026-09-04T23:10:00Z,Miami Marlins,Chicago Cubs,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Chris Sale,6.5,0.5726928568418737,0.06137283380754288,4,2026-09-04T22:41:00Z,Philadelphia Phillies,Atlanta Braves,2026-09-04,2026-09-04T03:19:45Z
+pitcher_strikeouts,Cristopher Sanchez,6.5,0.5076406016088045,0.062026729694535376,4,2026-09-04T22:41:00Z,Philadelphia Phillies,Atlanta Braves,2026-09-04,2026-09-04T03:19:45Z
