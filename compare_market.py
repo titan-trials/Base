@@ -81,6 +81,15 @@ TEAM_ABBREV = {
 # always differ by a point or two on noise alone.
 NOTABLE_EDGE = 0.05
 
+# A pitcher with fewer starts than this in the workload window is mostly
+# the prior -- and until 2026-09-05 the prior was the LEAGUE mean, so a
+# debut or a spot starter was projected like an established starter. On
+# 8/31 the two biggest "edges" on the board were pitchers with 0 and 1
+# starts of history. The prior is fixed (see pitcher_workload), but a
+# number that is mostly prior is still not a disagreement worth a
+# curriculum entry, so thin pitchers are listed and not ranked.
+MIN_STARTS_FOR_EDGE = 5
+
 
 def normalise_name(name) -> str:
     """
@@ -198,10 +207,16 @@ def report(game_date: str, top_n: int = 5):
     else:
         print()
 
-    big = out[out["edge"].abs() >= NOTABLE_EDGE].head(top_n)
+    thin = out[out["starts_seen"] < MIN_STARTS_FOR_EDGE]
+    ranked = out[out["starts_seen"] >= MIN_STARTS_FOR_EDGE]
+    big = ranked[ranked["edge"].abs() >= NOTABLE_EDGE].head(top_n)
     print("\n" + "-" * 74)
     print(f"THE {len(big)} BIGGEST DISAGREEMENTS -- the curriculum")
     print("-" * 74)
+    if len(thin):
+        print(f"  ({len(thin)} pitcher(s) with under {MIN_STARTS_FOR_EDGE} "
+              f"starts of history excluded from the ranking: "
+              f"{', '.join(thin['player'].astype(str))})")
     if big.empty:
         print("  Nothing over "
               f"{NOTABLE_EDGE:.0%}. The model and the market agree tonight.")

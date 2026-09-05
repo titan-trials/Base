@@ -167,6 +167,118 @@ def predict_pa_distributions(model, frame: pd.DataFrame,
     ]
 
 
+# ---------------------------------------------------------------------
+# The empirical table -- what replaced the regression on 2026-09-05
+# ---------------------------------------------------------------------
+#
+# The multinomial regression above had two problems that PAVA could not
+# reach:
+#
+#   1. TRAIN/SERVE SKEW. At fit time `batter_pa_mean_20` was a 20-game
+#      rolling mean and `team_pa_mean_20` a 50-row rolling mean grouped by
+#      home_team (the VENUE's team -- for an away batter, the opponent's).
+#      At prediction time predict_slate fed the hitter's all-time mean for
+#      both. Two of five features meant different things on the two sides
+#      of the model.
+#
+#   2. THE PARABOLA. `lineup_slot_sq` let the fitted curve over-separate
+#      the order: 4.55 PA at leadoff against a measured 4.29, a spread of
+#      1.14 against 0.94. PAVA fixed the ORDERING (V8c); the level stayed
+#      wrong, and V8c said as much.
+#
+# There is no regression to get wrong here. P(PA = k | slot, home/away) is
+# read straight off the history: eighteen cells, thousands of player-games
+# in each, and the answer is a histogram. It is monotone in slot by
+# construction whenever the cells are full, it has no serving path that
+# can drift from its fitting path, and a hitter with an unknown slot falls
+# back to the same table marginalised over slot.
+#
+# What it deliberately does NOT do is condition on team quality. The old
+# `team_pa_mean_20` was meant to, and was noise. If a team term earns its
+# place later, the right way in is to tilt a cell's distribution to a
+# team-level mean (see _tilt_distribution_to_mean), not to fit harder.
+PA_TABLE_SINCE = "2024-01-01"     # current era; PA/game drifts slowly
+PA_TABLE_MIN_CELL = 300           # below this, a cell borrows its slot's pooled shape
+
+
+class EmpiricalPAModel:
+    """
+    P(PA = k | lineup slot, home/away), counted from starters' games.
+    """
+
+    def __init__(self, cells: dict, by_slot: dict, pooled: dict, n_rows: int):
+        self.cells = cells        # {(slot, is_home): {k: p}}
+        self.by_slot = by_slot    # {slot: {k: p}}
+        self.pooled = pooled      # {k: p}
+        self.n_rows = n_rows
+
+    @staticmethod
+    def _hist(values: pd.Series) -> dict:
+        counts = values.clip(MIN_PA, MAX_PA).astype(int).value_counts()
+        total = float(counts.sum())
+        return {int(k): float(v) / total for k, v in counts.sort_index().items()}
+
+    @classmethod
+    def fit(cls, game_totals: pd.DataFrame, since: str = PA_TABLE_SINCE,
+            min_cell: int = PA_TABLE_MIN_CELL, verbose: bool = True):
+        df = game_totals
+        if "lineup_slot" not in df.columns:
+            raise ValueError("game_totals has no lineup_slot column")
+        if "is_starter" in df.columns:
+            df = df[df["is_starter"] == 1]
+        df = df[pd.to_numeric(df["lineup_slot"], errors="coerce").between(1, 9)]
+        if since is not None and "game_date" in df.columns:
+            recent = df[pd.to_datetime(df["game_date"]) >= pd.Timestamp(since)]
+            # A pool rebuilt from a short cache may have too little recent
+            # history; fall back to everything rather than to nothing.
+            if len(recent) >= 18 * min_cell:
+                df = recent
+        if df.empty:
+            raise ValueError("no starter games with a lineup slot")
+        df = df.copy()
+        df["lineup_slot"] = df["lineup_slot"].astype(int)
+        df["is_home"] = df["is_home"].fillna(0).astype(int) if "is_home" in df.columns else 0
+
+        pooled = cls._hist(df["pa"])
+        by_slot = {int(s): cls._hist(g["pa"]) for s, g in df.groupby("lineup_slot")}
+        cells = {}
+        for (slot, home), g in df.groupby(["lineup_slot", "is_home"]):
+            if len(g) >= min_cell:
+                cells[(int(slot), int(home))] = cls._hist(g["pa"])
+
+        model = cls(cells, by_slot, pooled, len(df))
+        if verbose:
+            means = model.slot_means()
+            print(f"  PA table: {len(df):,} starter games since "
+                  f"{pd.to_datetime(df['game_date']).min().date() if 'game_date' in df.columns else '?'}, "
+                  f"{len(cells)} of 18 slot x home cells filled.")
+            print("    expected PA by slot: " + "  ".join(
+                f"{s}:{means[s]:.2f}" for s in sorted(means)))
+        return model
+
+    def distribution(self, slot, is_home) -> dict:
+        try:
+            slot = int(slot)
+        except (TypeError, ValueError):
+            return dict(self.pooled)
+        try:
+            home = int(is_home)
+        except (TypeError, ValueError):
+            home = None
+        if home is not None and (slot, home) in self.cells:
+            return dict(self.cells[(slot, home)])
+        return dict(self.by_slot.get(slot, self.pooled))
+
+    def slot_means(self) -> dict:
+        return {s: sum(k * v for k, v in d.items()) for s, d in self.by_slot.items()}
+
+    def predict(self, frame: pd.DataFrame) -> list:
+        slots = pd.to_numeric(frame["lineup_slot"], errors="coerce")
+        homes = frame["is_home"] if "is_home" in frame.columns else pd.Series(np.nan, index=frame.index)
+        return [self.distribution(s, h) if pd.notna(s) else dict(self.pooled)
+                for s, h in zip(slots, homes)]
+
+
 def evaluate_pa_model(model, test_df: pd.DataFrame,
                       feature_cols=PA_FEATURES) -> dict:
     """

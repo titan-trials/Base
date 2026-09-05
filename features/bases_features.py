@@ -146,3 +146,59 @@ def expected_total_bases_per_pa(p_hr, p_hit, bases_per_hit) -> np.ndarray:
     # home run, once at 4 bases and again at ~1.27.
     p_other_hit = np.clip(p_hit - p_hr, 0.0, 1.0)
     return p_hr * 4.0 + p_other_hit * np.asarray(bases_per_hit, dtype=float)
+
+
+# ---------------------------------------------------------------------
+# Per-hitter contribution SHAPE (model_flags.PER_HITTER_SHAPE)
+# ---------------------------------------------------------------------
+#
+# The engine reshapes ONE population per-PA total-bases distribution to
+# each hitter's mean. Two hitters with the same expected total bases per
+# plate appearance therefore get the same P(4 | something happened) --
+# the slugger and the slap hitter share a tail. With the flag on, each
+# hitter's per-PA distribution is assembled from his own pieces:
+#
+#     P(0) = 1 - p_hit
+#     P(1) = (p_hit - p_hr) * share_single
+#     P(2) = (p_hit - p_hr) * share_double
+#     P(3) = (p_hit - p_hr) * share_triple
+#     P(4) = p_hr
+#
+# where the shares are his non-HR hit mix, shrunk toward the league mix
+# with the same hit-count prior measure_bases_per_hit estimates. The mean
+# is p_hr*4 + (p_hit-p_hr)*bases_per_hit by construction, so the level is
+# unchanged; only the shape becomes his.
+def measure_hit_mix(pa_table: pd.DataFrame, prior_hits: float,
+                    verbose: bool = True) -> tuple:
+    """Returns (league_mix, per_batter_mix DataFrame[single, double, triple])."""
+    hits = pa_table[(pa_table["is_hit"] == 1) & (pa_table["is_hr"] == 0)]
+    if len(hits) < 2000 or "total_bases" not in hits.columns:
+        league = pd.Series({1: 0.78, 2: 0.19, 3: 0.03})
+        return league, pd.DataFrame(columns=[1, 2, 3])
+    counts = pd.crosstab(hits["batter"], hits["total_bases"].clip(1, 3))
+    for b in (1, 2, 3):
+        if b not in counts.columns:
+            counts[b] = 0
+    counts = counts[[1, 2, 3]]
+    league = counts.sum() / counts.sum().sum()
+    prior = float(prior_hits) if np.isfinite(prior_hits) else 1e6
+    n = counts.sum(axis=1)
+    mix = counts.add(prior * league, axis=1).div(n + prior, axis=0)
+    if verbose:
+        print(f"  Hit mix: league single/double/triple "
+              f"{league[1]:.3f}/{league[2]:.3f}/{league[3]:.3f} on "
+              f"{len(hits):,} non-HR hits; per-batter shrunk with a "
+              f"{prior:.0f}-hit prior.")
+    return league, mix
+
+
+def per_hitter_tb_distribution(p_hr: float, p_hit: float, mix) -> np.ndarray:
+    """Per-PA total-bases vector 0..4 for one hitter (see above)."""
+    p_hr = float(np.clip(p_hr, 0.0, 1.0))
+    p_hit = float(np.clip(p_hit, p_hr, 1.0))
+    other = p_hit - p_hr
+    shares = np.asarray([mix[1], mix[2], mix[3]], dtype=float)
+    shares = shares / shares.sum() if shares.sum() > 0 else np.array([0.78, 0.19, 0.03])
+    dist = np.array([1.0 - p_hit, other * shares[0], other * shares[1],
+                     other * shares[2], p_hr])
+    return dist / dist.sum()

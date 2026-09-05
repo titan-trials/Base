@@ -1,5 +1,9 @@
 # Model review — 2026-09-05
 
+> Status: everything in Tiers 1–3 was fixed the same day; Tier 2 is built
+> behind flags with a lab. See `fixes-2026-09-05.md` (project) and the V10
+> section of CONTEXT.md for what was done and what it measured.
+
 Read: CONTEXT.md, all eight project docs, `predict_slate.py`, `score_slate.py`,
 `rate_features.py`, `pa_table.py`, `compound.py`, `pa_projection.py`,
 `pitcher_workload.py`, `pitcher_data.py`, `team_model.py`, `compare_market.py`,
@@ -185,9 +189,9 @@ per-PA models as the anchors. For H+R+RBI the same applies through
 
 ### 9. The runs/RBI/bases paths use raw, unshrunk means
 
-`rbi_rate = pa.groupby("batter")["rbi"].mean()`, `obp_series`,
-`bases_per_hit`, and the RBI two-stage inputs `bat_is_hr_career` /
-`bat_is_hit_career` — all raw per-batter means, and the last two
+`rbi_rate = pa.groupby("batter")["rbi"].mean()`, `obp_series`, and the
+RBI two-stage inputs `bat_is_hr_career` / `bat_is_hit_career` — raw
+per-batter means (correction: `bases_per_hit` was already shrunk), and the last two
 `fillna(0.0)`, i.e. a debut hitter gets a HR rate below any hitter
 alive. The 9/04 slate has a hitter with 5 PA of history. Everything else
 in the engine shrinks; these should use `estimate_prior_strength` +

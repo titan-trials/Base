@@ -45,7 +45,15 @@ if len(PLAYER_IDS) < 4:
                      "Run build_wide_pool.py or train_props_v5.py first.")
 
 HALF = len(PLAYER_IDS) // 2
-GAME_DATE = "2026-08-18"
+# A date no real slate will ever have. The first version used 2026-08-18
+# -- a REAL, scored slate -- and predict_slate's preservation rule quietly
+# appended the fixture's eight synthetic rows to that file. A test must not
+# be able to touch the record it exists to protect.
+#
+# Recent enough that the workload model's trailing window contains real
+# starts (so the per-slot starter share path runs), but the All-Star break
+# Monday, so no real slate can ever exist for it.
+GAME_DATE = "2026-07-13"
 
 
 def fake_get_slate(game_date, verbose=True):
@@ -101,7 +109,8 @@ def fake_refresh_players(player_ids, start_date, end_date, max_age_days=1,
 
 
 def fake_build_pitcher_rates(pitcher_ids, start_date, end_date, league_rates,
-                             names=None, max_age_days=1, verbose=True):
+                             names=None, max_age_days=1, verbose=True,
+                             as_of=None):
     """No network: synthesise plausible pitcher rates so the real-pitcher
     branch and its handedness splits get exercised."""
     import numpy as np
@@ -148,11 +157,25 @@ def _write_synthetic_slots():
     counts["lineup_slot"] = counts["batter"].map(rank).clip(1, 9).astype(int)
     counts["is_starter"] = 1
     counts[["game_pk", "batter", "lineup_slot", "is_starter"]].to_csv(
-        cache_path("lineup_slots"), index=False)
+        SYNTHETIC_SLOTS_PATH, index=False)
+
+
+# NEVER the live cache. The first version of this test wrote its
+# fabricated slots to cache/lineup_slots.csv -- the real file, 222k rows
+# fetched from MLB boxscores over weeks -- and on 2026-09-05 destroyed it.
+# The fixture lives in its own file, and `cache_path` is patched inside
+# predict_slate so that its own read of "lineup_slots" lands here too.
+SYNTHETIC_SLOTS_PATH = cache_path("_dryrun_lineup_slots")
+
+
+def fake_cache_path(key):
+    if key == "lineup_slots":
+        return SYNTHETIC_SLOTS_PATH
+    return cache_path(key)
 
 
 def fake_attach_lineup_slots(df, verbose=True):
-    slots = pd.read_csv(cache_path("lineup_slots"))
+    slots = pd.read_csv(SYNTHETIC_SLOTS_PATH)
     return df.merge(slots, on=["batter", "game_pk"], how="left")
 
 
@@ -196,6 +219,7 @@ def main():
     patch("build_pitcher_rates", fake_build_pitcher_rates)
     patch("pitcher_hand", lambda pid, cache_lookup=True: "R")
     patch("attach_lineup_slots", fake_attach_lineup_slots)
+    patch("cache_path", fake_cache_path)
 
 
     print("=" * 72)
@@ -268,7 +292,32 @@ def main():
     print("\n" + "=" * 72)
     print("ALL CHECKS PASSED -- predict_slate.py runs end to end.")
     print("=" * 72)
+    _cleanup()
+
+
+def _cleanup():
+    """Remove the fixture's output files so the dashboard never lists a
+    1999 slate. Best effort -- a locked file is reported, not fatal."""
+    for path in [cache_path(f"{stem}_{GAME_DATE}")
+                 for stem in ("slate", "pitchers", "teams")] + [SYNTHETIC_SLOTS_PATH]:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                # A mounted folder that forbids deletes: park it under
+                # _to_delete/ instead, where the dashboard's glob cannot
+                # see it.
+                park = os.path.join(os.path.dirname(os.path.dirname(path)),
+                                    "_to_delete")
+                os.makedirs(park, exist_ok=True)
+                try:
+                    os.replace(path, os.path.join(park, os.path.basename(path)))
+                except OSError as exc:
+                    print(f"  (could not remove {path}: {exc} -- delete it by hand)")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _cleanup()

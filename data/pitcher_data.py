@@ -81,6 +81,7 @@ from data.cache import cache_path, load_cached, save_cache
 from data.game_filter import regular_season_only
 from data.refresh import checked_today, mark_checked
 from features.rate_features import estimate_prior_strength, shrink
+from features.pa_table import NON_PA_EVENTS, K_EVENTS
 
 DEDUPE_KEYS = ["game_pk", "at_bat_number", "pitch_number"]
 REQUEST_DELAY_SEC = 0.3
@@ -181,14 +182,16 @@ def pitcher_pa_table(raw: pd.DataFrame) -> pd.DataFrame:
     if raw.empty:
         return pd.DataFrame()
 
-    pa = raw[raw["events"].notna()].copy()
+    # Same plate-appearance definition as features/pa_table: an event
+    # that is a baserunning play or a feed advisory is not a batter faced.
+    pa = raw[raw["events"].notna() & ~raw["events"].isin(NON_PA_EVENTS)].copy()
     if pa.empty:
         return pd.DataFrame()
 
     pa["is_hr"] = (pa["events"] == "home_run").astype(int)
     pa["is_hit"] = pa["events"].isin(HIT_EVENTS).astype(int)
     pa["is_walk"] = pa["events"].isin(WALK_EVENTS).astype(int)
-    pa["is_k"] = (pa["events"] == "strikeout").astype(int)
+    pa["is_k"] = pa["events"].isin(K_EVENTS).astype(int)
     pa["stand"] = pa.get("stand", pd.Series("R", index=pa.index)).fillna("R")
     return pa
 
@@ -225,10 +228,18 @@ def load_starter_history(pitcher_ids, verbose: bool = True) -> pd.DataFrame:
 
 def build_pitcher_rates(pitcher_ids, start_date: str, end_date: str,
                         league_rates: dict, names=None,
-                        max_age_days: int = 0, verbose: bool = True) -> pd.DataFrame:
+                        max_age_days: int = 0, verbose: bool = True,
+                        as_of=None) -> pd.DataFrame:
     """
     One row per pitcher with shrunk rates allowed, overall and by batter
     handedness.
+
+    `as_of` plus model_flags.PITCHER_RATE_WINDOW_DAYS restricts the
+    plate appearances counted to a trailing window ending at `as_of`. Off
+    by default: the hitter model was validated with career rates on both
+    the training and serving side, and this must change on both or
+    neither. The pitcher STRIKEOUT prop no longer depends on these rates
+    at all -- it uses features/pitcher_workload's 12-month rate directly.
 
     Columns per target:
         pit_{target}_allowed      overall, shrunk toward league
@@ -257,6 +268,12 @@ def build_pitcher_rates(pitcher_ids, start_date: str, end_date: str,
         raw = refresh_pitcher(pitcher_id, start_date, end_date,
                               max_age_days=max_age_days, verbose=verbose)
         table = pitcher_pa_table(raw)
+        if not table.empty and as_of is not None:
+            import model_flags
+            window = model_flags.PITCHER_RATE_WINDOW_DAYS
+            if window:
+                cutoff = pd.Timestamp(as_of) - pd.Timedelta(days=int(window))
+                table = table[pd.to_datetime(table["game_date"]) >= cutoff]
         if not table.empty:
             tables[pitcher_id] = table
 

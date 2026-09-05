@@ -66,11 +66,13 @@ from data.park_factors import get_park_factor
 from features.pa_table import build_pa_table, build_game_totals, per_pa_contribution_distribution
 from features.rate_features import (
     add_batter_rolling_rates, add_pitcher_rolling_rates, add_matchup_rates,
-    rate_feature_cols, RATE_TARGETS, log5,
+    rate_feature_cols, RATE_TARGETS, log5, shrink, estimate_prior_strength,
+    estimate_prior_strength_counts, add_tonight_rows, TONIGHT_GAME_PK,
 )
 from features.form_features import add_form_deviation
 from features.pitcher_workload import (
     identify_starts, WorkloadModel, k_count_distribution, prob_over,
+    per_batter_k_probs, starter_exposure_by_slot,
 )
 from features.rbi_features import (
     add_base_state, add_lineup_obp_context, train_runner_model,
@@ -79,15 +81,17 @@ from features.rbi_features import (
 from features.run_features import (
     RunScoringModel, add_lineup_obp_behind, build_run_training_frame,
 )
-from features.team_model import TeamRunModel, build_game_predictions
+from features.team_model import (
+    TeamRunModel, build_game_predictions, measure_bench_run_share,
+)
 from data.team_lines import get_team_lines
 from data.batting_lines import get_batting_lines
 from features.bases_features import (
     measure_bases_per_hit, expected_total_bases_per_pa,
+    measure_hit_mix, per_hitter_tb_distribution,
 )
 from features.pa_projection import (
-    prepare_pa_training_frame, train_pa_model, predict_pa_distributions, PA_FEATURES,
-    enforce_slot_monotonicity,
+    EmpiricalPAModel, enforce_slot_monotonicity,
 )
 from model.compound import (
     prob_at_least_one, prob_over_line, marginalise_over_pa,
@@ -111,7 +115,57 @@ SHAPE_METHOD = "frequency"   # chosen by select_tilt_method on the backtest
 K_LINES = (5.5, 6.5)
 
 
-def build_pitcher_props(frame, starters, game_date):
+def fit_workload(starters, game_date, verbose=True):
+    """
+    The batters-faced / strikeout-rate model for tonight's starters, or
+    None when there is nothing to fit it on.
+
+    Fitted ONCE, early, because two things need it: the pitcher props at
+    the end, and -- new on 2026-09-05 -- the starter share for every hitter
+    row, which used to be a league constant.
+    """
+    if starters is None or starters.empty:
+        return None
+    history = load_starter_history(starters["pid"].astype(int).tolist(),
+                                   verbose=verbose)
+    if history.empty:
+        if verbose:
+            print("  No cached pitcher history -- no workload model.")
+        return None
+    try:
+        return WorkloadModel.fit(identify_starts(history),
+                                 as_of=pd.Timestamp(game_date), verbose=verbose)
+    except ValueError as exc:
+        if verbose:
+            print(f"  Could not fit the workload model: {exc}")
+        return None
+
+
+def measure_k_platoon(pa, as_of, months=12):
+    """
+    Odds multipliers for the handedness matchup on strikeouts, measured
+    on the hitter pool over the same trailing window the workload model
+    uses. Returns {"same": m_same, "opposite": m_opp} with m = odds(rate
+    in that matchup) / odds(overall rate), or both 1.0 if the table cannot
+    say.
+    """
+    if "platoon_edge" not in pa.columns or "is_k" not in pa.columns:
+        return {"same": 1.0, "opposite": 1.0}
+    cutoff = pd.Timestamp(as_of) - pd.DateOffset(months=months)
+    recent = pa[(pa["game_date"] >= cutoff) & pa["is_k"].notna()]
+    if len(recent) < 5000:
+        recent = pa[pa["is_k"].notna()]
+    overall = float(recent["is_k"].mean())
+    same = recent[recent["platoon_edge"] == 0]["is_k"].mean()
+    opp = recent[recent["platoon_edge"] == 1]["is_k"].mean()
+    if not (0 < overall < 1) or pd.isna(same) or pd.isna(opp):
+        return {"same": 1.0, "opposite": 1.0}
+    o = lambda p: p / (1 - p)
+    return {"same": float(o(same) / o(overall)),
+            "opposite": float(o(opp) / o(overall))}
+
+
+def build_pitcher_props(frame, starters, game_date, workload, pa):
     """
     Strikeout probabilities for tonight's starters.
 
@@ -126,29 +180,38 @@ def build_pitcher_props(frame, starters, game_date):
     lineup slot n mod 9, and with a confirmed lineup that is a known
     person rather than an average. The compounding walks the real order.
 
+    WHICH PER-BATTER RATE (changed 2026-09-05)
+    ------------------------------------------
+    The rate walked down the lineup is now `per_batter_k_probs`: the
+    hitter's shrunk one-season strikeout odds ratio applied to the
+    starter's 12-month shrunk rate from the workload model -- the number
+    the backtest validated. Until now it was the hitter model's
+    `p_is_k_vs_starter`, whose pitcher input was a since-2022 career rate
+    with no window; that path was never backtested and scored -0.14 live.
+    See features/pitcher_workload.per_batter_k_probs for the measurements.
+
     Written to its own file. The slate file is one row per hitter and a
     pitcher is not a hitter; bolting nine mostly-empty columns onto every
     batter row to carry fourteen pitchers would be worse than a second
     table.
     """
-    if starters is None or starters.empty:
+    if starters is None or starters.empty or workload is None:
         return pd.DataFrame()
-    if "p_is_k_vs_starter" not in frame.columns:
-        print("  (no starter-only strikeout rate -- skipping pitcher props)")
+    if "bat_is_k_600" not in frame.columns:
+        print("  (no hitter strikeout rates -- skipping pitcher props)")
         return pd.DataFrame()
 
     print("\nPitcher strikeouts...")
-    history = load_starter_history(starters["pid"].astype(int).tolist())
-    if history.empty:
-        print("  No cached pitcher history. Skipping.")
-        return pd.DataFrame()
-
-    all_starts = identify_starts(history)
-    try:
-        workload = WorkloadModel.fit(all_starts, as_of=pd.Timestamp(game_date))
-    except ValueError as exc:
-        print(f"  Could not fit the workload model: {exc}")
-        return pd.DataFrame()
+    # The hitter's league, over the same window as the pitcher's, so the
+    # odds ratio in per_batter_k_probs is era-consistent on both sides.
+    cutoff = pd.Timestamp(game_date) - pd.DateOffset(months=12)
+    recent = pa[(pa["game_date"] >= cutoff) & pa["is_k"].notna()]
+    batter_league = float(recent["is_k"].mean()) if len(recent) >= 5000 \
+        else float(pa["is_k"].mean())
+    platoon = measure_k_platoon(pa, game_date)
+    print(f"  Hitter-side league K rate (12 mo): {batter_league:.4f}; "
+          f"platoon odds x{platoon['same']:.3f} same-hand, "
+          f"x{platoon['opposite']:.3f} opposite.")
 
     rows = []
     for s in starters.itertuples():
@@ -159,7 +222,12 @@ def build_pitcher_props(frame, starters, game_date):
         if lineup.empty:
             continue
         lineup = lineup.sort_values("lineup_slot", na_position="last")
-        p_by_batter = lineup["p_is_k_vs_starter"].to_numpy(dtype=float)
+        bat_rates = lineup["bat_is_k_600"].to_numpy(dtype=float)
+        edge = lineup["platoon_edge"].to_numpy(dtype=float) \
+            if "platoon_edge" in lineup.columns else np.ones(len(lineup))
+        factor = np.where(edge > 0, platoon["opposite"], platoon["same"])
+        p_by_batter = per_batter_k_probs(bat_rates, batter_league,
+                                         workload.k_rate(pid), factor)
         if not np.isfinite(p_by_batter).all() or len(p_by_batter) == 0:
             continue
 
@@ -209,6 +277,36 @@ def build_pitcher_props(frame, starters, game_date):
                  "prob_k_over_5.5", "prob_k_over_6.5"]]
           .head(8).to_string(index=False, float_format=lambda v: f"{v:.3f}"))
     return table
+
+
+def starter_share_for(hitter, pid, exposure: dict, pa_model, default: float) -> float:
+    """
+    This hitter's share of plate appearances against THIS starter.
+
+    exposure[pid][slot-1] is how many times the starter is expected to
+    face that slot (features/pitcher_workload.starter_exposure_by_slot);
+    dividing by the slot's expected plate appearances gives the share.
+    Falls back to the pool-wide constant when the starter or the PA table
+    is unknown, and to the nine-slot average when the slot is.
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return default
+    if pid not in exposure or pa_model is None:
+        return default
+    slot = pd.to_numeric(getattr(hitter, "lineup_slot", np.nan), errors="coerce")
+    is_home = getattr(hitter, "is_home", np.nan)
+    if pd.isna(slot) or not 1 <= int(slot) <= 9:
+        dist = pa_model.distribution(np.nan, is_home)
+        faced = float(np.mean(exposure[pid]))
+    else:
+        dist = pa_model.distribution(int(slot), is_home)
+        faced = float(exposure[pid][int(slot) - 1])
+    exp_pa = sum(k * v for k, v in dist.items())
+    if exp_pa <= 0:
+        return default
+    return float(np.clip(faced / exp_pa, 0.25, 0.90))
 
 
 def preserve_committed_rows(fresh, existing_path, now_utc, force):
@@ -342,6 +440,7 @@ def main(game_date: str = None):
     # Recent lineup slots, used to project a lineup where none is posted.
     print("\nLoading recent lineup history (for projecting unposted lineups)...")
     slot_history = pd.DataFrame()
+    cached_slots = pd.DataFrame()
     try:
         cached_slots = pd.read_csv(cache_path("lineup_slots"))
         slot_history = cached_slots[cached_slots["lineup_slot"] > 0]
@@ -391,6 +490,16 @@ def main(game_date: str = None):
     pa = build_pa_table(combined)
     print(f"  {len(pa):,} plate appearances, {pa['batter'].nunique()} batters, "
           f"through {pa['game_date'].max().date()}")
+
+    # One synthetic "tonight" row per slate hitter, appended BEFORE the
+    # rolling features are computed. Every rolling column is `.shift(1)`,
+    # so the row a hitter's features used to be read from -- his last real
+    # plate appearance -- carried the window ending one PA EARLIER. Tonight
+    # was being predicted without his most recent trip to the plate, on
+    # every hitter, every night. The synthetic row's shifted window is
+    # exactly the un-shifted window of his last real PA, which is the
+    # number wanted. The rows are removed again before anything trains.
+    pa = add_tonight_rows(pa, hitters["player_id"].unique(), game_date)
     pa = add_batter_rolling_rates(pa)
     pa = add_pitcher_rolling_rates(pa)
     pa = add_matchup_rates(pa)
@@ -410,6 +519,18 @@ def main(game_date: str = None):
     # anyone remembering.
     pa = add_form_deviation(pa)
     pa["park_hr_factor"] = pa["home_team"].apply(get_park_factor) / 100.0
+
+    # Split the synthetic rows back out. `latest` is tonight's feature row
+    # per hitter; `pa` is real history again, with the outcome columns
+    # restored to integers so nothing downstream sees a float where it
+    # expects a flag.
+    is_tonight = pa["game_pk"] == TONIGHT_GAME_PK
+    latest = pa[is_tonight].set_index("batter")
+    pa = pa[~is_tonight].copy()
+    for col in ("is_hr", "is_hit", "is_walk", "is_k", "rbi", "reached",
+                "reached_nonhr", "hrr_certain", "total_bases"):
+        if col in pa.columns:
+            pa[col] = pa[col].astype(int)
 
     game_totals = build_game_totals(pa)
 
@@ -442,12 +563,29 @@ def main(game_date: str = None):
     models = {t: (train_rate_model(train_pa, feature_groups[t], t), feature_groups[t])
               for t in RATE_TARGETS}
 
+    # ---- 4b. Plate-appearance table and the workload model -----------
+    # Both are needed BEFORE the feature rows: the starter share for each
+    # hitter is his slot's exposure to the starter divided by his expected
+    # plate appearances, and both of those come from here.
+    print("\nPlate-appearance projection...")
+    pa_model = None
+    try:
+        pa_model = EmpiricalPAModel.fit(game_totals)
+    except Exception as e:
+        print(f"  PA table unavailable ({type(e).__name__}: {e}) -- "
+              f"using historical PA histograms instead.")
+
+    workload = fit_workload(starters, game_date) if USE_REAL_PITCHER_DATA else None
+    exposure = {}
+    if workload is not None:
+        for pid in starters["pid"].dropna().astype(int).unique():
+            exposure[int(pid)] = starter_exposure_by_slot(*workload.bf_pmf(int(pid)))
+
     # ---- 5. Tonight's feature row per hitter -------------------------
-    # Start from each batter's most recent plate appearance -- that row
-    # carries his current shrunk rolling rates -- then overwrite the
-    # context columns with tonight's opponent, park and handedness.
+    # `latest` holds one synthetic row per slate hitter (see step 4)
+    # carrying his current shrunk rolling rates; overwrite the context
+    # columns with tonight's opponent, park and handedness.
     print("\nAssembling tonight's feature rows...")
-    latest = pa.sort_values("game_date").groupby("batter").tail(1).set_index("batter")
 
     pitcher_rates = {}
     for target in RATE_TARGETS:
@@ -462,9 +600,14 @@ def main(game_date: str = None):
     # is near-harmless for an average starter and worth up to 5 percentage
     # points of home-run probability against an extreme one. Measured from
     # this pool rather than assumed.
+    #
+    # The pool-wide share below is now only the FALLBACK. Where the
+    # workload model knows the starter, the share is per pitcher and per
+    # slot -- see features/pitcher_workload.starter_exposure_by_slot.
     starter_share, bullpen_rates = measure_bullpen_rates(pa)
     print(f"  Bullpen exposure: starter throws {starter_share:.1%} of a "
-          f"hitter's plate appearances.")
+          f"hitter's plate appearances (pool average; per-slot where the "
+          f"starter is known).")
     team_bullpen = measure_team_bullpen_rates(pa, bullpen_rates)
 
     if USE_REAL_PITCHER_DATA and not starters.empty:
@@ -472,9 +615,10 @@ def main(game_date: str = None):
             starters["pid"].astype(int).tolist(), START_DATE, game_date,
             league_rates=league,
             names=dict(zip(starters["pid"].astype(int), starters["pname"])),
+            as_of=game_date,
         ).set_index("pitcher")
 
-    rows, matched_bullpen = [], 0
+    rows, matched_bullpen, shares = [], 0, []
     for hitter in hitters.itertuples():
         if hitter.player_id not in latest.index:
             continue
@@ -490,6 +634,8 @@ def main(game_date: str = None):
         p_throws = pitcher_hand(int(pid)) if has_real else _pitcher_hand(pa, pid)
         batter_stand = row.get("stand", "R")
         row["platoon_edge"] = int(batter_stand != p_throws)
+        row["same_hand_lhb"] = int(batter_stand == p_throws == "L")
+        row["same_hand_rhb"] = int(batter_stand == p_throws == "R")
 
         # The bullpen he will actually face, not the league's. `opponent`
         # is the pitching side. A team missing from the table -- an
@@ -499,6 +645,8 @@ def main(game_date: str = None):
         # number instead of as silently average bullpens everywhere.
         pen = team_bullpen.get(getattr(hitter, "opponent", None), bullpen_rates)
         matched_bullpen += int(pen is not bullpen_rates)
+        share = starter_share_for(hitter, pid, exposure, pa_model, starter_share)
+        shares.append(share)
 
         for target in RATE_TARGETS:
             allowed_col = f"pit_{target}_allowed"
@@ -513,14 +661,13 @@ def main(game_date: str = None):
                     split_col, pitcher_rates_real.loc[pid][allowed_col]))
                 # Weight by how much of the game he actually pitches.
                 allowed = blend_with_bullpen(
-                    unblended, pen.get(target, league[target]),
-                    starter_share)
+                    unblended, pen.get(target, league[target]), share)
             elif (pid is not None and target in pitcher_rates
                     and pid in pitcher_rates[target].index):
                 unblended = float(pitcher_rates[target].loc[pid])
                 allowed = blend_with_bullpen(
                     unblended,
-                    pen.get(target, league[target]), starter_share)
+                    pen.get(target, league[target]), share)
             else:
                 unblended = league[target]
                 # No starter named (TBD). The whole game is effectively
@@ -552,6 +699,7 @@ def main(game_date: str = None):
 
         rows.append({**hitter._asdict(), **{c: row.get(c) for c in needed},
                      "stand": row.get("stand", "R"),
+                     "starter_share": share,
                      "pit_is_k_starter_only": row.get("pit_is_k_starter_only"),
                      "matchup_is_k_starter_only": row.get(
                          "matchup_is_k_starter_only"),
@@ -568,6 +716,10 @@ def main(game_date: str = None):
         return
     frame = frame.dropna(subset=needed).reset_index(drop=True)
     print(f"  {len(frame)} hitters have enough history to score.")
+    if shares:
+        s = pd.Series(shares)
+        print(f"  Starter share per hitter: {s.min():.2f} to {s.max():.2f} "
+              f"(mean {s.mean():.3f}; pool constant was {starter_share:.3f}).")
     if team_bullpen:
         print(f"  Team bullpen rates matched for {matched_bullpen} of "
               f"{len(hitters)} hitters"
@@ -619,9 +771,10 @@ def main(game_date: str = None):
         print(f"  Starter-only strikeout rate for {swapped} hitters "
               f"({shift:+.4f} per PA against the blended figure).")
 
-    pa_dists = _project_pa(game_totals, frame)
-    # The batting order is a sequence, and the model scores each hitter
-    # alone. See features/pa_projection.enforce_slot_monotonicity.
+    pa_dists = _project_pa(game_totals, frame, pa_model)
+    # The batting order is a sequence. The empirical table is monotone in
+    # slot whenever its cells are full; this is the guard for when they
+    # are not. See features/pa_projection.enforce_slot_monotonicity.
     pa_dists = enforce_slot_monotonicity(frame, pa_dists)
 
     # ---- 7. Compound -------------------------------------------------
@@ -634,17 +787,28 @@ def main(game_date: str = None):
     # runner but not his player id, so the boxscore is the source. See
     # data/batting_lines.py.
     print("  Loading official batting lines (hits / runs / RBI)...")
-    obp_series = (pa.groupby("batter")["is_hit"].mean()
-                  + pa.groupby("batter")["is_walk"].mean())
-    league_obp = float(pa["is_hit"].mean() + pa["is_walk"].mean())
+    # Per-batter on-base rate, SHRUNK. This was a raw mean until
+    # 2026-09-05: a hitter with five plate appearances of history could
+    # carry an OBP of 0.000 or 0.600 into the lineup-context and run
+    # models while every rate beside it was shrunk. Same estimator as the
+    # rest of the engine.
+    reached_hw = (pa["is_hit"] + pa["is_walk"]).clip(upper=1)
+    obp_totals = reached_hw.groupby(pa["batter"]).agg(["sum", "count"])
+    league_obp = float(reached_hw.mean())
+    obp_k = estimate_prior_strength(obp_totals["sum"], obp_totals["count"])
+    obp_series = pd.Series(
+        shrink(obp_totals["sum"], obp_totals["count"], league_obp, obp_k),
+        index=obp_totals.index)
 
     run_model = RunScoringModel(league_obp=league_obp)
     train_games = game_totals.copy()
+    official_lines = pd.DataFrame()
     try:
-        lines = get_batting_lines(game_totals["game_pk"].unique(), verbose=True)
-        if lines.empty:
+        official_lines = get_batting_lines(game_totals["game_pk"].unique(),
+                                           verbose=True)
+        if official_lines.empty:
             raise ValueError("no batting lines cached -- run fetch_batting_lines.py")
-        train_games = build_run_training_frame(game_totals, lines)
+        train_games = build_run_training_frame(game_totals, official_lines)
         coverage = float(train_games["runs_official"].notna().mean())
         print(f"  Official lines matched for {coverage:.1%} of player-games.")
         if coverage < 0.9:
@@ -675,26 +839,33 @@ def main(game_date: str = None):
     # over-predicts RBI by 6.4% (0.1267 vs 0.1191 actual), which is ~0.032
     # RBI per game of pure bias flowing into every H+R+RBI line. The
     # two-stage model lands at 0.1194 -- essentially unbiased.
+    # Per-batter RBI per PA, shrunk. RBI is a count (0-4 per plate
+    # appearance), so the prior strength comes from the count version of
+    # the method-of-moments estimator rather than the binomial one.
     league_rbi = float(pa["rbi"].mean())
-    rbi_rate = pa.groupby("batter")["rbi"].mean()
+    rbi_totals = pa.groupby("batter")["rbi"].agg(["sum", "count", "var"])
+    rbi_k = estimate_prior_strength_counts(rbi_totals["sum"], rbi_totals["count"],
+                                           rbi_totals["var"])
+    rbi_rate = pd.Series(shrink(rbi_totals["sum"], rbi_totals["count"],
+                                league_rbi, rbi_k), index=rbi_totals.index)
     frame["p_rbi"] = frame["player_id"].map(rbi_rate).fillna(league_rbi)
 
     try:
+        # The RBI model's batter inputs are the SHRUNK, shifted career
+        # columns the PA table already carries -- the same ones the per-PA
+        # models train on. They used to be overwritten here with raw
+        # full-history means (leaky at training, and `fillna(0.0)` at
+        # serving gave a debut hitter a home-run rate below any hitter
+        # alive). `frame` carries the same columns via `needed`, so the
+        # serving side needs nothing added either.
         pa_state = add_base_state(pa)
-        obp = (pa.groupby("batter")["is_hit"].mean()
-               + pa.groupby("batter")["is_walk"].mean())
-        league_obp = float(pa["is_hit"].mean() + pa["is_walk"].mean())
+        obp = obp_series
 
         runner_context = pa_state.groupby(["batter", "game_pk"]).agg(
             runners_on=("runners_on", "mean")).reset_index()
         game_ctx = game_totals.merge(runner_context, on=["batter", "game_pk"],
                                      how="inner")
         game_ctx = add_lineup_obp_context(game_ctx, obp, league_obp)
-
-        pa_state["bat_is_hr_career"] = pa_state["batter"].map(
-            pa.groupby("batter")["is_hr"].mean())
-        pa_state["bat_is_hit_career"] = pa_state["batter"].map(
-            pa.groupby("batter")["is_hit"].mean())
 
         runner_model = train_runner_model(game_ctx)
         rbi_model = train_rbi_model(pa_state)
@@ -704,10 +875,6 @@ def main(game_date: str = None):
             slate_ctx["batter"] = slate_ctx["player_id"]
             slate_ctx["game_pk"] = slate_ctx["game_pk"]
             slate_ctx = add_lineup_obp_context(slate_ctx, obp, league_obp)
-            slate_ctx["bat_is_hr_career"] = slate_ctx["player_id"].map(
-                pa.groupby("batter")["is_hr"].mean()).fillna(0.0)
-            slate_ctx["bat_is_hit_career"] = slate_ctx["player_id"].map(
-                pa.groupby("batter")["is_hit"].mean()).fillna(0.0)
             slate_ctx["lineup_slot"] = pd.to_numeric(
                 slate_ctx["lineup_slot"], errors="coerce")
 
@@ -791,7 +958,8 @@ def main(game_date: str = None):
     # at bat that produced it -- so neither needs the run-attribution
     # machinery H+R+RBI required. That is the whole reason these two props
     # cost a few lines rather than a file.
-    league_bph, bases_per_hit, _ = measure_bases_per_hit(pa)
+    league_bph, bases_per_hit, bases_prior = measure_bases_per_hit(pa)
+    league_mix, _ = measure_hit_mix(pa, bases_prior, verbose=False)
     frame["bases_per_hit"] = (frame["player_id"].map(bases_per_hit)
                               .fillna(league_bph))
     frame["expected_tb_per_pa"] = expected_total_bases_per_pa(
@@ -809,15 +977,33 @@ def main(game_date: str = None):
           f"per plate appearance (league shape mean "
           f"{float((tb_dist * np.arange(len(tb_dist))).sum()):.4f}).")
 
+    # Per-hitter total-bases shape (model_flags.PER_HITTER_SHAPE). Off by
+    # default: the population shape reshaped to his mean is what the
+    # scoring log was produced with. See features/bases_features.
+    import model_flags
+    per_hitter_tb = None
+    if model_flags.PER_HITTER_SHAPE:
+        _, hit_mix = measure_hit_mix(pa, bases_prior)
+        per_hitter_tb = [
+            per_hitter_tb_distribution(
+                p_hr, p_hit,
+                hit_mix.loc[pid] if pid in hit_mix.index else league_mix)
+            for pid, p_hr, p_hit in zip(frame["player_id"], frame["p_is_hr"],
+                                        frame["p_is_hit"])]
+        print("  Total bases: per-hitter shape ON (model_flags.PER_HITTER_SHAPE).")
+
     for label, dist, disp, means, lines in [
         ("tb", tb_dist, tb_dispersion, frame["expected_tb_per_pa"], TB_LINES),
         ("hits", hit_dist, hit_dispersion, frame["p_is_hit"], HIT_LINES),
     ]:
         for line in lines:
             values = []
-            for pa_dist, mean in zip(pa_dists, means):
-                shaped = scale_contribution_distribution(
-                    dist, float(mean), method=SHAPE_METHOD)
+            for i, (pa_dist, mean) in enumerate(zip(pa_dists, means)):
+                if label == "tb" and per_hitter_tb is not None:
+                    shaped = per_hitter_tb[i]
+                else:
+                    shaped = scale_contribution_distribution(
+                        dist, float(mean), method=SHAPE_METHOD)
                 values.append(marginalise_over_pa(
                     pa_dist,
                     lambda n, d=shaped, s=disp: prob_over_line(
@@ -895,6 +1081,9 @@ def main(game_date: str = None):
         # features/team_model.py -- so exporting it lets the dashboard show
         # who the model expects to do the scoring without re-deriving anything.
         "exp_runs",
+        # Share of this hitter's plate appearances expected against the
+        # starter (per pitcher, per slot -- see starter_exposure_by_slot).
+        "starter_share",
         # Form marker. Written to the slate so it can be graded later, and
         # read by nothing that produces the probabilities beside it.
         "form_z", "form_state",
@@ -919,7 +1108,7 @@ def main(game_date: str = None):
     out = preserve_committed_rows(out, existing_path, now_utc, force)
     out = out.sort_values(["game_pk", "lineup_slot"], na_position="last")
 
-    pitchers_out = build_pitcher_props(frame, starters, game_date)
+    pitchers_out = build_pitcher_props(frame, starters, game_date, workload, pa)
 
     path = cache_path(f"slate_{game_date}")
     out.to_csv(path, index=False)
@@ -957,7 +1146,13 @@ def main(game_date: str = None):
         print(f"  Could not load final scores ({exc}); using a "
               f"league-average shape.")
         team_lines = None
-    team_model = TeamRunModel.fit(team_lines, verbose=True)
+    bench_share = None
+    try:
+        bench_share = measure_bench_run_share(official_lines, cached_slots)
+    except Exception as exc:
+        print(f"  Bench run share unavailable ({exc}); using the fallback.")
+    team_model = TeamRunModel.fit(team_lines, verbose=True,
+                                  bench_run_share=bench_share)
     games_out = build_game_predictions(frame, team_model, verbose=True)
     if games_out.empty:
         print("  No game had both lineups projected -- nothing written.")
@@ -1013,9 +1208,12 @@ def main(game_date: str = None):
 # Baseball-Reference and MLB's API disagree on a few abbreviations. The
 # park-factor table uses the first spelling; the schedule feed may return
 # either.
+# "ATH" used to map to "OAK" here, which sent the Athletics' home games to
+# the Coliseum's park factor (92) two seasons after they left it. ATH now
+# has its own entry in data/park_factors.py.
 TEAM_ALIASES = {
     "CHW": "CWS", "KCR": "KC", "SDP": "SD", "SFG": "SF",
-    "TBR": "TB", "WSN": "WSH", "ATH": "OAK", "AZ": "ARI",
+    "TBR": "TB", "WSN": "WSH", "AZ": "ARI",
 }
 
 
@@ -1051,59 +1249,32 @@ def _pitcher_hand(pa: pd.DataFrame, pitcher_id):
     return rows["p_throws"].mode().iloc[0]
 
 
-def _project_pa(game_totals: pd.DataFrame, frame: pd.DataFrame) -> list:
+def _project_pa(game_totals: pd.DataFrame, frame: pd.DataFrame,
+                pa_model=None) -> list:
     """
     Plate-appearance distribution per slate hitter.
 
-    Uses the lineup-slot model where a slot is known, and each hitter's own
-    historical distribution otherwise. Both feed the same compounding step,
-    so a hitter with an unknown slot still gets a number -- just a vaguer
-    one.
-    """
-    # Failures here are REPORTED, not swallowed. A silent fallback to
-    # historical PA histograms looks identical in the output to the real
-    # lineup-slot model, and the difference is roughly 0.9 plate
-    # appearances between the leadoff and ninth slots -- the largest single
-    # term in every probability this script prints.
-    model = None
-    try:
-        with_slots = game_totals.copy()
-        if "lineup_slot" not in with_slots.columns:
-            raise ValueError("game_totals has no lineup_slot column")
-        training = prepare_pa_training_frame(with_slots)
-        if len(training) < 500:
-            print(f"  PA model: only {len(training)} usable rows (need 500) -- "
-                  f"using historical PA histograms instead.")
-        else:
-            model = train_pa_model(training)
-            print(f"  PA model trained on {len(training):,} player-games.")
-    except Exception as e:
-        print(f"  PA model unavailable ({type(e).__name__}: {e}) -- "
-              f"using historical PA histograms instead.")
+    The empirical slot x home/away table where a slot is known (see
+    features/pa_projection.EmpiricalPAModel), the same table marginalised
+    over slot where it is not, and each hitter's own historical histogram
+    only when the table itself could not be built. Every path feeds the
+    same compounding step.
 
+    Failures are REPORTED, not swallowed: a silent fallback to historical
+    histograms looks identical in the output to the real projection, and
+    the difference is roughly 0.9 plate appearances between the leadoff
+    and ninth slots -- the largest single term in every probability this
+    script prints.
+    """
+    if pa_model is not None:
+        return pa_model.predict(frame)
+
+    print("  PA projection: no table -- using each hitter's own PA histogram.")
     fallback = {
         pid: empirical_pa_distribution(game_totals, pid)
         for pid in frame["player_id"].unique()
     }
-
-    if model is None:
-        return [fallback[pid] for pid in frame["player_id"]]
-
-    rows = frame.copy()
-    batter_mean = game_totals.groupby("batter")["pa"].mean()
-    rows["batter_pa_mean_20"] = rows["player_id"].map(batter_mean).fillna(
-        float(game_totals["pa"].mean()))
-    rows["team_pa_mean_20"] = rows["batter_pa_mean_20"]
-    rows["lineup_slot"] = pd.to_numeric(rows["lineup_slot"], errors="coerce")
-    rows["lineup_slot_sq"] = rows["lineup_slot"] ** 2
-
-    known = rows["lineup_slot"].notna()
-    distributions = [fallback[pid] for pid in rows["player_id"]]
-    if known.any():
-        predicted = predict_pa_distributions(model, rows[known], PA_FEATURES)
-        for position, dist in zip(np.flatnonzero(known.to_numpy()), predicted):
-            distributions[position] = dist
-    return distributions
+    return [fallback[pid] for pid in frame["player_id"]]
 
 
 if __name__ == "__main__":

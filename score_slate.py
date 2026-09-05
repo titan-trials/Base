@@ -232,6 +232,7 @@ def score_frame(frame) -> list:
 FORM_LOG_KEY = "form_log"
 PITCHER_LOG_KEY = "pitcher_scoring_log"
 K_LINES = (5.5, 6.5)
+K_MODEL_CHANGED = "2026-09-05"
 
 
 def score_pitchers(game_date: str):
@@ -382,8 +383,20 @@ def score_pitchers(game_date: str):
         ["n", "base_rate", "brier", "mean_pred", "pred_bf", "actual_bf",
          "game_date"]].apply(_pool).reset_index()
     print(running.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
-    print(f"\n  Backtest on 1,101 held-out starts gave +0.0635 (over 5.5) "
-          f"and +0.0765 (over 6.5).")
+    # The per-batter rate the prop compounds changed on this date (the
+    # validated 12-month rate replaced an untested career-window path).
+    # Two different models should not share one running total.
+    since = log[pd.to_datetime(log["game_date"]) >= pd.Timestamp(K_MODEL_CHANGED)]
+    if len(since) and len(since) < len(log):
+        print(f"\n  Since {K_MODEL_CHANGED} (current K path only):")
+        print(since.groupby("line")[
+            ["n", "base_rate", "brier", "mean_pred", "pred_bf", "actual_bf",
+             "game_date"]].apply(_pool).reset_index()
+            .to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+    print(f"\n  Rolling-origin backtest on the DEPLOYED path (backtest_k_props.py,")
+    print(f"  2,834 starts Apr-Aug 2026) gave +0.094 (over 5.5) and +0.097 (over 6.5).")
+    print(f"  Rows before 2026-09-05 were produced by a different, untested path")
+    print(f"  -- see CONTEXT.md V10 -- and should not be pooled with rows after it.")
     print(f"  If live settles well below that, the backtest was optimistic "
           f"and it is worth knowing.")
     # Against the closing line, on the same starters. The only
@@ -397,6 +410,158 @@ def score_pitchers(game_date: str):
 
     print(f"\n  Log: cache/{PITCHER_LOG_KEY}.csv")
     return running
+
+
+TEAM_LOG_KEY = "team_scoring_log"
+
+
+def score_teams(game_date: str):
+    """
+    Grade the game page: win probabilities and projected totals against
+    final scores, and against the closing moneyline and total where
+    cache/gamelines_{date}.csv was captured (python -m data.odds_lines
+    DATE gamelines -- two credits for the whole slate).
+
+    Added 2026-09-05. Until then features/team_model.py had no grade at
+    all -- the doc said so -- and its home win probabilities averaged
+    0.503 on a slate, against a league near 0.53-0.54. Two numbers are
+    logged per slate: Brier skill of the home win probability against the
+    pooled home base rate, and the mean error of the projected total.
+    Fifteen games a night is almost nothing; the running total is the
+    number to read.
+    """
+    from data.team_lines import fetch_team_lines, CACHE_KEY as TEAM_LINES_KEY
+    from compare_market import TEAM_ABBREV
+
+    path = cache_path(f"teams_{game_date}")
+    if not os.path.exists(path):
+        return None
+    preds = pd.read_csv(path)
+    if preds.empty or "home_win_prob" not in preds.columns:
+        return None
+
+    print("\n" + "=" * 72)
+    print(f"GAME LINES -- {game_date}")
+    print("=" * 72)
+
+    finals = fetch_team_lines(game_date, game_date, verbose=False)
+    if finals is None or finals.empty:
+        print("  No final scores available yet. Try again later.")
+        return None
+    # Grow the cache the run-distribution is fitted on, one night at a time.
+    lines_path = cache_path(TEAM_LINES_KEY)
+    try:
+        existing = pd.read_csv(lines_path) if os.path.exists(lines_path) else pd.DataFrame()
+        new = finals[~finals["game_pk"].isin(existing.get("game_pk", pd.Series(dtype=int)))]
+        if not new.empty:
+            pd.concat([existing, new], ignore_index=True).to_csv(lines_path, index=False)
+            print(f"  Added {new['game_pk'].nunique()} game(s) to cache/{TEAM_LINES_KEY}.csv.")
+    except Exception as exc:
+        print(f"  (could not extend team_lines cache: {exc})")
+
+    home = finals[finals["is_home"] == 1][["game_pk", "runs", "runs_allowed"]]
+    home = home.rename(columns={"runs": "actual_home", "runs_allowed": "actual_away"})
+    merged = preds.merge(home, on="game_pk", how="inner")
+    if merged.empty:
+        print("  None of the predicted games have a final score yet.")
+        return None
+
+    merged[CLEAN_COL] = clean_mask(merged)
+    basis = merged[merged[CLEAN_COL]]
+    if basis.empty:
+        print("  No game was predicted before its own first pitch -- nothing "
+              "here is evidence. Reported, not logged.")
+        basis = merged
+        loggable = False
+    else:
+        loggable = True
+
+    y = (basis["actual_home"] > basis["actual_away"]).astype(float)
+    p = basis["home_win_prob"].astype(float)
+    brier = float(((p - y) ** 2).mean())
+    total_actual = basis["actual_home"] + basis["actual_away"]
+    total_pred = basis["total_runs"]
+    print(f"  {len(basis)} games graded{'' if loggable else ' (tainted)'}.")
+    print(f"    Home win: said {p.mean():.3f}, did {y.mean():.3f}, "
+          f"Brier {brier:.4f} (0.25 is a coin flip).")
+    print(f"    Total runs: projected {total_pred.mean():.2f}, actual "
+          f"{total_actual.mean():.2f}, MAE {(total_pred - total_actual).abs().mean():.2f}.")
+    # Home-side residual: is the projected split missing home advantage?
+    # features/team_model.HOME_EDGE_SHARE is the knob this informs.
+    split_resid = float(((basis["actual_home"] - basis["actual_away"])
+                         - (basis["home_runs"] - basis["away_runs"])).mean())
+    print(f"    Home-minus-away runs: actual exceeds projected by "
+          f"{split_resid:+.2f} per game (positive = model under-rates home).")
+
+    # Market, if captured.
+    market = None
+    gl_path = cache_path(f"gamelines_{game_date}")
+    if os.path.exists(gl_path):
+        gl = pd.read_csv(gl_path)
+        gl["home_team"] = gl["home_team"].map(TEAM_ABBREV).fillna(gl["home_team"])
+        gl["away_team"] = gl["away_team"].map(TEAM_ABBREV).fillna(gl["away_team"])
+        m = basis.merge(gl[["home_team", "away_team", "home_win_prob_market",
+                            "total_line"]],
+                        on=["home_team", "away_team"], how="inner")
+        if not m.empty:
+            ym = (m["actual_home"] > m["actual_away"]).astype(float)
+            b_model = float(((m["home_win_prob"] - ym) ** 2).mean())
+            b_market = float(((m["home_win_prob_market"] - ym) ** 2).mean())
+            ta = m["actual_home"] + m["actual_away"]
+            mae_model = float((m["total_runs"] - ta).abs().mean())
+            mae_market = float((m["total_line"] - ta).abs().mean()) \
+                if m["total_line"].notna().any() else float("nan")
+            market = {"n_market": len(m), "brier_market": b_market,
+                      "brier_model_on_market": b_model,
+                      "total_mae_market": mae_market,
+                      "total_mae_model_on_market": mae_model}
+            print(f"    vs closing line ({len(m)} games): moneyline Brier "
+                  f"model {b_model:.4f} / market {b_market:.4f}; total MAE "
+                  f"model {mae_model:.2f} / market {mae_market:.2f}.")
+            print(f"    Mean |model - market| on home win prob: "
+                  f"{(m['home_win_prob'] - m['home_win_prob_market']).abs().mean():.3f}")
+
+    if not loggable:
+        return None
+    entry = {"game_date": game_date, "n": len(basis),
+             "mean_pred_home": float(p.mean()), "home_rate": float(y.mean()),
+             "brier_home": brier,
+             "total_pred": float(total_pred.mean()),
+             "total_actual": float(total_actual.mean()),
+             "total_mae": float((total_pred - total_actual).abs().mean()),
+             "home_split_resid": split_resid}
+    if market:
+        entry.update(market)
+    log_path = cache_path(TEAM_LOG_KEY)
+    if os.path.exists(log_path):
+        previous = pd.read_csv(log_path)
+        previous = previous[previous["game_date"] != game_date]
+        log = pd.concat([previous, pd.DataFrame([entry])], ignore_index=True)
+    else:
+        log = pd.DataFrame([entry])
+    log.to_csv(log_path, index=False)
+
+    w = log["n"].to_numpy(dtype=float)
+    base = float(np.average(log["home_rate"], weights=w))
+    pooled_brier = float(np.average(log["brier_home"], weights=w))
+    ref = base * (1 - base)
+    print(f"\n  RUNNING TOTAL across {len(log)} slate(s), {int(w.sum())} games:")
+    print(f"    home win Brier {pooled_brier:.4f}, base rate {base:.3f}, "
+          f"skill vs base rate {1 - pooled_brier / ref if ref > 0 else float('nan'):+.4f}")
+    print(f"    projected total {np.average(log['total_pred'], weights=w):.2f} "
+          f"vs actual {np.average(log['total_actual'], weights=w):.2f}, "
+          f"MAE {np.average(log['total_mae'], weights=w):.2f}")
+    if "home_split_resid" in log.columns:
+        print(f"    home-minus-away residual {np.average(log['home_split_resid'].fillna(0), weights=w):+.3f} "
+              f"runs/game (sets team_model.HOME_EDGE_SHARE once it settles)")
+    if "brier_market" in log.columns and log["brier_market"].notna().any():
+        mk = log[log["brier_market"].notna()]
+        wm = mk["n_market"].to_numpy(dtype=float)
+        print(f"    vs market on {int(wm.sum())} games: Brier model "
+              f"{np.average(mk['brier_model_on_market'], weights=wm):.4f} / "
+              f"market {np.average(mk['brier_market'], weights=wm):.4f}")
+    print(f"  Log: cache/{TEAM_LOG_KEY}.csv")
+    return log
 
 
 def score_form_marker(frame, game_date: str):
@@ -876,6 +1041,13 @@ def main(game_date: str = None):
     # fifteen rows against 250, so mixing them into the hitter totals
     # would let a noisy handful move a number built from hundreds.
     score_pitchers(game_date)
+
+    # The game page: win probabilities and totals against final scores
+    # and, where captured, the closing moneyline and total.
+    try:
+        score_teams(game_date)
+    except Exception as exc:
+        print(f"\n  Team grading skipped: {type(exc).__name__}: {exc}")
 
     print(f"\n  Log: cache/{SCORING_LOG_KEY}.csv")
 

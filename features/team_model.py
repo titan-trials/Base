@@ -66,19 +66,45 @@ MAX_RUNS = 60
 FALLBACK_MEAN = 4.40
 FALLBACK_VAR = 9.60
 
+# Fraction of the measured home/away run gap to add to the projected
+# split. 0 = trust the hitter model's own is_home effect (default).
+HOME_EDGE_SHARE = 0.0
+
 
 class TeamRunModel:
     """Negative binomial run distribution, fitted to real final scores."""
 
     def __init__(self, dispersion_r, league_mean, home_extra_win=0.5,
-                 fitted_on=0):
+                 fitted_on=0, home_run_edge=0.0, bench_run_share=0.0):
         self.r = float(dispersion_r)
         self.league_mean = float(league_mean)
         self.home_extra_win = float(home_extra_win)
         self.fitted_on = int(fitted_on)
+        # HOME-FIELD ADVANTAGE (2026-09-05). Measured as the gap between
+        # what teams score at home and away, in runs per game, from the
+        # same final scores the shape is fitted on (+0.085 on 2025-26).
+        # MEASURED AND PRINTED, NOT APPLIED BY DEFAULT: `is_home` is a
+        # feature in every per-PA model and in the plate-appearance table,
+        # so the offensive side of home advantage is already inside the
+        # lineup sums, and adding it again here would count it twice. What
+        # the lineup sum cannot see is the defensive side and the bat-last
+        # edge, which is what the one-run tie-break carries. score_slate
+        # logs the home-side residual (actual minus projected run split);
+        # if that runs positive over enough slates, set HOME_EDGE_SHARE to
+        # the fraction of the measured edge to apply.
+        self.home_run_edge = float(home_run_edge) * HOME_EDGE_SHARE
+        # BENCH SHARE. A lineup is nine starters; a team's runs are not.
+        # Pinch hitters and substitutes score a measurable slice, and
+        # summing nine hitters leaves it out -- which is why the sanity
+        # check in the team-run doc landed at 4.17 against a league 4.4.
+        # Measured from boxscores as the share of a team's runs scored by
+        # non-starters; the lineup sum is divided by (1 - share).
+        self.bench_run_share = float(np.clip(bench_run_share, 0.0, 0.25))
 
     @classmethod
-    def fit(cls, team_lines: pd.DataFrame = None, verbose: bool = True):
+    def fit(cls, team_lines: pd.DataFrame = None, verbose: bool = True,
+            bench_run_share: float = None):
+        home_edge = 0.0
         if team_lines is None or team_lines.empty or "runs" not in team_lines:
             if verbose:
                 print("  Team runs: NO cached final scores -- using a "
@@ -89,6 +115,10 @@ class TeamRunModel:
         else:
             runs = pd.to_numeric(team_lines["runs"], errors="coerce").dropna()
             mean, var, n = float(runs.mean()), float(runs.var()), len(runs)
+            if "is_home" in team_lines.columns and n > 500:
+                by_side = team_lines.groupby("is_home")["runs"].mean()
+                if 1 in by_side.index and 0 in by_side.index:
+                    home_edge = float(by_side[1] - by_side[0])
             # Home teams win extra-inning games slightly more often for
             # the same reason they win overall -- batting last. Measured
             # from games decided by one run as a proxy, which is a
@@ -118,8 +148,21 @@ class TeamRunModel:
             print(f"    Negative binomial dispersion r = {dispersion:.2f}. "
                   f"Poisson would be var/mean = 1.00.")
             print(f"    Home team takes {home_extra:.1%} of games decided "
-                  f"by one run.")
-        return cls(dispersion, mean, home_extra, n)
+                  f"by one run; scores {home_edge:+.3f} runs more at home "
+                  f"than away.")
+            if bench_run_share:
+                print(f"    Non-starters score {bench_run_share:.1%} of a "
+                      f"team's runs; lineup sums are scaled up by that.")
+        return cls(dispersion, mean, home_extra, n,
+                   home_run_edge=home_edge,
+                   bench_run_share=bench_run_share or 0.0)
+
+    def adjust_sides(self, home_runs: float, away_runs: float) -> tuple:
+        """Bench share and home-field advantage applied to a lineup sum."""
+        scale = 1.0 / (1.0 - self.bench_run_share)
+        home = home_runs * scale + 0.5 * self.home_run_edge
+        away = away_runs * scale - 0.5 * self.home_run_edge
+        return max(home, 0.05), max(away, 0.05)
 
     def pmf(self, expected_runs: float) -> np.ndarray:
         """
@@ -167,6 +210,53 @@ class TeamRunModel:
         return float(np.clip(p_home, 0.0, 1.0)), float(np.clip(1 - p_home, 0.0, 1.0))
 
 
+BENCH_RUN_SHARE_FALLBACK = 0.075
+
+
+def measure_bench_run_share(batting_lines: pd.DataFrame,
+                            lineup_slots: pd.DataFrame,
+                            verbose: bool = True) -> float:
+    """
+    Share of a team's runs scored by players who did not start.
+
+    Joins the official boxscore lines (runs per player-game) to the
+    lineup table (the nine starters per side). Only games where BOTH
+    lineups are fully listed -- eighteen distinct starters -- are used:
+    the lineup cache averages under sixteen names a game, and in a game
+    with a missing starter every unlisted player would be counted as
+    bench, which put the first version of this at 17%. On the 1,886
+    complete games it is 7.9% of runs (7.6% of plate appearances).
+    """
+    if (batting_lines is None or batting_lines.empty
+            or lineup_slots is None or lineup_slots.empty
+            or "runs" not in batting_lines.columns):
+        return BENCH_RUN_SHARE_FALLBACK
+    slots = lineup_slots.rename(columns={"batter": "player_id"})
+    if "player_id" not in slots.columns:
+        return BENCH_RUN_SHARE_FALLBACK
+    if "is_starter" in slots.columns:
+        slots = slots[slots["is_starter"] == 1]
+    slots = slots[["game_pk", "player_id"]].drop_duplicates()
+    per_game = slots.groupby("game_pk").size()
+    complete = per_game[per_game == 18].index
+    if len(complete) < 100:
+        return BENCH_RUN_SHARE_FALLBACK
+    slots = slots[slots["game_pk"].isin(complete)].assign(is_starter=1)
+    merged = batting_lines[batting_lines["game_pk"].isin(complete)].merge(
+        slots, on=["game_pk", "player_id"], how="left")
+    if merged.empty or merged["runs"].sum() <= 0:
+        return BENCH_RUN_SHARE_FALLBACK
+    merged["is_starter"] = merged["is_starter"].fillna(0)
+    share = float(merged.loc[merged["is_starter"] == 0, "runs"].sum()
+                  / merged["runs"].sum())
+    if verbose:
+        print(f"  Bench run share: {share:.1%} of runs by non-starters, "
+              f"over {len(complete):,} games with both lineups complete.")
+    if not 0.0 <= share <= 0.25:
+        return BENCH_RUN_SHARE_FALLBACK
+    return share
+
+
 def team_expected_runs(frame: pd.DataFrame) -> pd.DataFrame:
     """
     Sum the hitter model up to a team total.
@@ -210,14 +300,19 @@ def build_game_predictions(frame: pd.DataFrame, model: TeamRunModel,
         if home.empty or away.empty:
             continue
         home, away = home.iloc[0], away.iloc[0]
-        p_home, p_away = model.win_probability(
-            home["expected_runs"], away["expected_runs"])
+        home_runs, away_runs = model.adjust_sides(
+            float(home["expected_runs"]), float(away["expected_runs"]))
+        p_home, p_away = model.win_probability(home_runs, away_runs)
         rows.append({
             "game_pk": int(game_pk),
             "home_team": home["team"], "away_team": away["team"],
-            "home_runs": float(home["expected_runs"]),
-            "away_runs": float(away["expected_runs"]),
-            "total_runs": float(home["expected_runs"] + away["expected_runs"]),
+            "home_runs": home_runs,
+            "away_runs": away_runs,
+            "total_runs": home_runs + away_runs,
+            # The raw lineup sums, before bench share and home edge, so
+            # the adjustment is visible rather than baked in.
+            "home_lineup_runs": float(home["expected_runs"]),
+            "away_lineup_runs": float(away["expected_runs"]),
             "home_win_prob": p_home, "away_win_prob": p_away,
             "home_hitters": int(home["hitters"]),
             "away_hitters": int(away["hitters"]),

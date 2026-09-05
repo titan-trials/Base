@@ -131,11 +131,103 @@ def estimate_prior_strength(successes, trials, min_trials: int = 50) -> float:
     return float(np.clip(k, 10.0, 5000.0))
 
 
+def estimate_prior_strength_counts(sums, trials, within_var,
+                                   min_trials: int = 50) -> float:
+    """
+    The same method-of-moments idea for a per-PA rate of a COUNT (RBI,
+    total bases) rather than a 0/1 flag.
+
+        observed variance of per-player means
+          = true variance + mean(within-player variance / n)
+
+    The binomial term p(1-p)/n is replaced by each player's own sample
+    variance over n. Returns k for (sum + k * prior) / (n + k), in plate
+    appearances. Clipped to the same band as the binary version.
+    """
+    sums = np.asarray(sums, dtype=float)
+    trials = np.asarray(trials, dtype=float)
+    within_var = np.asarray(within_var, dtype=float)
+    keep = (trials >= min_trials) & np.isfinite(within_var)
+    sums, trials, within_var = sums[keep], trials[keep], within_var[keep]
+    if len(trials) < 3:
+        return 500.0
+    rates = sums / trials
+    observed_var = rates.var(ddof=1)
+    noise_var = float(np.mean(within_var / trials))
+    true_var = observed_var - noise_var
+    if true_var <= 1e-12:
+        return 5000.0
+    # In the binomial version k = p(1-p)/true_var - 1; the analogue with a
+    # pooled within-player variance in place of p(1-p).
+    k = float(np.mean(within_var)) / true_var - 1.0
+    return float(np.clip(k, 10.0, 5000.0))
+
+
 def shrink(successes, trials, prior_mean: float, k: float):
     """The empirical-Bayes estimate. Vectorised over arrays."""
     successes = np.asarray(successes, dtype=float)
     trials = np.asarray(trials, dtype=float)
     return (successes + k * prior_mean) / (trials + k)
+
+
+# game_pk stamped on the synthetic "tonight" rows. Negative so it can never
+# collide with a real MLB game id, and a constant so callers can find and
+# remove the rows again.
+TONIGHT_GAME_PK = -1
+
+
+def add_tonight_rows(pa_table: pd.DataFrame, batter_ids, game_date) -> pd.DataFrame:
+    """
+    Append one synthetic, outcome-less plate appearance per batter, dated
+    tonight, so the rolling features land on a row that includes his most
+    recent real plate appearance.
+
+    WHY THIS EXISTS
+    ---------------
+    Every rolling column is `.shift(1)` -- a plate appearance never sees
+    its own outcome. predict_slate used to read tonight's features off a
+    batter's LAST REAL ROW, and the shifted window on that row ends one
+    plate appearance before it. So every hitter, every night, was
+    predicted from a window missing his most recent trip to the plate.
+    One PA in 150 is small; it is also systematic, and it is free to fix.
+
+    The synthetic row has NaN outcomes. Rolling sums and counts skip NaN,
+    so its shifted window is exactly the un-shifted window of the last
+    real row -- which is the number wanted. Rows are found again by
+    `game_pk == TONIGHT_GAME_PK` and must be dropped before anything trains
+    or aggregates.
+
+    Sorts the result the way features/pa_table.build_pa_table does, so the
+    synthetic row is the last one for each batter.
+    """
+    ids = [b for b in pd.Series(list(batter_ids)).dropna().unique()]
+    if not ids:
+        return pa_table
+    last = (pa_table[pa_table["batter"].isin(ids)]
+            .sort_values(["batter", "game_date", "game_pk", "at_bat_number"]
+                         if "at_bat_number" in pa_table.columns
+                         else ["batter", "game_date", "game_pk"])
+            .groupby("batter").tail(1).copy())
+    if last.empty:
+        return pa_table
+    last["game_pk"] = TONIGHT_GAME_PK
+    # Strictly after every real row, even when the slate date is not
+    # (re-running a past date), so the sort below keeps it last.
+    last["game_date"] = max(pd.Timestamp(game_date),
+                            pd.Timestamp(pa_table["game_date"].max()) + pd.Timedelta(days=1))
+    if "at_bat_number" in last.columns:
+        last["at_bat_number"] = 0
+    if "inning" in last.columns:
+        last["inning"] = np.nan
+    last["pitcher"] = np.nan
+    for col in ("is_hr", "is_hit", "is_walk", "is_k", "rbi", "reached",
+                "reached_nonhr", "hrr_certain", "total_bases"):
+        if col in last.columns:
+            last[col] = np.nan
+    out = pd.concat([pa_table, last], ignore_index=True)
+    sort_cols = [c for c in ["batter", "game_date", "game_pk", "at_bat_number"]
+                 if c in out.columns]
+    return out.sort_values(sort_cols).reset_index(drop=True)
 
 
 def add_batter_rolling_rates(pa_table: pd.DataFrame,
@@ -156,16 +248,30 @@ def add_batter_rolling_rates(pa_table: pd.DataFrame,
     because of a rule, but because 150 is smaller than k for most of
     these stats, which is the honest consequence of having less evidence.
     """
+    import model_flags
     df = pa_table.copy()
     priors = {}
+    trailing = model_flags.LEAGUE_PRIOR_TRAILING_DAYS
 
     for target in targets:
         if target not in df.columns:
             continue
-        career_totals = df.groupby("batter")[target].agg(["sum", "size"])
+        # "count", not "size": a synthetic tonight row (add_tonight_rows)
+        # carries a NaN outcome and must not count as a trial.
+        career_totals = df.groupby("batter")[target].agg(["sum", "count"])
         prior_mean = float(df[target].mean())
-        k = estimate_prior_strength(career_totals["sum"], career_totals["size"])
+        k = estimate_prior_strength(career_totals["sum"], career_totals["count"])
         priors[target] = {"prior_mean": prior_mean, "k": k}
+
+        # The shrinkage TARGET. Default: the mean over the whole cache.
+        # With model_flags.LEAGUE_PRIOR_TRAILING_DAYS set, each row is
+        # shrunk toward the league rate over the trailing N days as of its
+        # own date -- so a 150-PA window in 2026 is pulled toward 2026's
+        # league, not toward a 2022-2026 blend. Off until flag_lab.py says
+        # it earns its keep.
+        row_prior = prior_mean
+        if trailing:
+            row_prior = trailing_league_rate(df, target, int(trailing)).to_numpy()
 
         grouped = df.groupby("batter", sort=False)[target]
         for window in windows:
@@ -176,17 +282,35 @@ def add_batter_rolling_rates(pa_table: pd.DataFrame,
                 lambda s: s.rolling(window, min_periods=20).count().shift(1)
             )
             df[f"bat_{target}_{window}"] = shrink(
-                successes.fillna(0), trials.fillna(0), prior_mean, k
+                successes.fillna(0), trials.fillna(0), row_prior, k
             )
 
         successes = grouped.transform(lambda s: s.expanding(min_periods=1).sum().shift(1))
         trials = grouped.transform(lambda s: s.expanding(min_periods=1).count().shift(1))
         df[f"bat_{target}_career"] = shrink(
-            successes.fillna(0), trials.fillna(0), prior_mean, k
+            successes.fillna(0), trials.fillna(0), row_prior, k
         )
 
     df.attrs["rate_priors"] = priors
     return df
+
+
+def trailing_league_rate(df: pd.DataFrame, target: str, days: int) -> pd.Series:
+    """
+    League rate of `target` over the trailing `days` ending the day BEFORE
+    each row's date, aligned to df's index. Falls back to the full-cache
+    mean where the window holds under 5,000 plate appearances.
+    """
+    daily = (df.dropna(subset=[target])
+               .groupby(df["game_date"].dt.normalize())[target]
+               .agg(["sum", "count"]).sort_index())
+    idx = pd.date_range(daily.index.min(), df["game_date"].max().normalize()
+                        + pd.Timedelta(days=1), freq="D")
+    daily = daily.reindex(idx, fill_value=0)
+    roll = daily.rolling(f"{days}D").sum().shift(1)
+    rate = roll["sum"] / roll["count"]
+    rate = rate.where(roll["count"] >= 5000, float(df[target].mean()))
+    return df["game_date"].dt.normalize().map(rate).fillna(float(df[target].mean()))
 
 
 def add_pitcher_rolling_rates(pa_table: pd.DataFrame,
@@ -213,12 +337,31 @@ def add_pitcher_rolling_rates(pa_table: pd.DataFrame,
         if target not in df.columns:
             continue
         prior_mean = float(df[target].mean())
-        career = df.groupby("pitcher")[target].agg(["sum", "size"])
-        k = estimate_prior_strength(career["sum"], career["size"], min_trials=20)
+        career = df.groupby("pitcher")[target].agg(["sum", "count"])
+        k = estimate_prior_strength(career["sum"], career["count"], min_trials=20)
 
-        grouped = df.sort_values(["pitcher", "game_date"]).groupby("pitcher", sort=False)[target]
-        successes = grouped.transform(lambda s: s.expanding(min_periods=1).sum().shift(1))
-        trials = grouped.transform(lambda s: s.expanding(min_periods=1).count().shift(1))
+        # Sorted WITHIN the game as well as across games. With game_date
+        # alone the order inside a game was whatever the concat left, so a
+        # training plate appearance's pitcher rate could include later
+        # plate appearances from the same game -- a small lookahead that
+        # the batter side never had, because pa_table sorts by
+        # at_bat_number for batters.
+        order = [c for c in ("pitcher", "game_date", "game_pk", "at_bat_number")
+                 if c in df.columns]
+        ordered = df.sort_values(order)
+        grouped = ordered.groupby("pitcher", sort=False)[target]
+        import model_flags
+        window_days = model_flags.PITCHER_RATE_WINDOW_DAYS
+        if window_days:
+            # Trailing time window instead of the whole career, matching
+            # what build_pitcher_rates does at serving time under the
+            # same flag. Per-pitcher time-based rolling, then the usual
+            # one-row shift.
+            successes = _rolling_days(ordered, "pitcher", target, int(window_days), "sum")
+            trials = _rolling_days(ordered, "pitcher", target, int(window_days), "count")
+        else:
+            successes = grouped.transform(lambda s: s.expanding(min_periods=1).sum().shift(1))
+            trials = grouped.transform(lambda s: s.expanding(min_periods=1).count().shift(1))
 
         shrunk = pd.Series(
             shrink(successes.fillna(0), trials.fillna(0), prior_mean, k),
@@ -228,6 +371,21 @@ def add_pitcher_rolling_rates(pa_table: pd.DataFrame,
         df[f"pit_{target}_n"] = trials.reindex(df.index).fillna(0)
 
     return df
+
+
+def _rolling_days(ordered: pd.DataFrame, key: str, target: str, days: int,
+                  how: str) -> pd.Series:
+    """Per-`key` trailing sum/count of `target` over `days`, shifted one
+    row so a row never sees itself. `ordered` must already be sorted by
+    (key, game_date, ...). Returns a Series aligned to ordered.index."""
+    out = pd.Series(np.nan, index=ordered.index)
+    for _, g in ordered.groupby(key, sort=False):
+        s = g[target]
+        r = s.set_axis(pd.DatetimeIndex(g["game_date"])).rolling(f"{days}D")
+        vals = (r.sum() if how == "sum" else r.count()).to_numpy()
+        vals = np.concatenate([[np.nan], vals[:-1]])
+        out.loc[g.index] = vals
+    return out
 
 
 def odds(p):
@@ -289,6 +447,16 @@ def rate_feature_cols(targets=RATE_TARGETS, windows=DEFAULT_PA_WINDOWS) -> dict:
     for target in targets:
         cols = [f"bat_{target}_{w}" for w in windows]
         cols += [f"bat_{target}_career", f"pit_{target}_allowed", f"matchup_{target}"]
-        cols += ["platoon_edge", "is_home", "park_hr_factor"]
+        cols += platoon_feature_cols() + ["is_home", "park_hr_factor"]
         groups[target] = cols
     return groups
+
+
+def platoon_feature_cols() -> list:
+    """`platoon_edge` alone, or the two same-hand indicators under
+    model_flags.PLATOON_SPLIT (left-on-left and right-on-right get their
+    own coefficients; the opposite-hand matchup is the reference)."""
+    import model_flags
+    if model_flags.PLATOON_SPLIT:
+        return ["same_hand_lhb", "same_hand_rhb"]
+    return ["platoon_edge"]

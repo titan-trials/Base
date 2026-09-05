@@ -55,6 +55,7 @@ import numpy as np
 import pandas as pd
 
 from data.game_filter import regular_season_only
+from features.pa_table import NON_PA_EVENTS, K_EVENTS
 
 # How far back to look, in months, from the day being predicted.
 #
@@ -90,6 +91,27 @@ OPENER_MAX_INNING = 4
 # starts before the league mean stops dominating. Low, because how deep a
 # manager lets someone go is only moderately about the pitcher.
 BF_PRIOR_STARTS = 4.7
+
+# What the prior MEAN is, and why it is not the league mean.
+#
+# A pitcher with no starts in the window is not an average starter having
+# his first start of the year. He is a call-up, a swingman or a spot
+# starter, and managers give those a short leash. Measured on the cached
+# starts in the trailing twelve months to 2026-09-05, batters faced by how
+# many prior starts the pitcher had in the window:
+#
+#     0 prior     21.02        3-4 prior   21.60
+#     1 prior     21.73        5-9 prior   22.66
+#     2 prior     22.02        10+ prior   23.21
+#
+# against a window mean of 22.8. The league mean is what an ESTABLISHED
+# starter faces; the prior should be what an UNKNOWN one faces. So the
+# shrinkage target, and the fallback for a pitcher never seen, is the mean
+# over starts with at most this many prior starts in the window. The
+# market already prices this -- a debut gets a 3.5 line, not a 5.5 -- and
+# the old league-mean fallback was where most of the "edge" against thin
+# pitchers on the market comparison came from.
+NEW_PITCHER_MAX_PRIOR = 2
 
 # Shrinkage for a pitcher's strikeout rate, in batters faced. Roughly ten
 # starts before his own rate outweighs the league's -- strikeout ability is
@@ -134,11 +156,11 @@ def identify_starts(pa: pd.DataFrame) -> pd.DataFrame:
     when it is available.
     """
     pa = regular_season_only(pa)
-    work = pa[pa["events"].notna()].copy()
+    work = pa[pa["events"].notna() & ~pa["events"].isin(NON_PA_EVENTS)].copy()
     work["game_date"] = pd.to_datetime(work["game_date"])
     g = (work.groupby(["pitcher", "game_pk"])
              .agg(bf=("events", "size"),
-                  k=("events", lambda s: (s == "strikeout").sum()),
+                  k=("events", lambda s: s.isin(K_EVENTS).sum()),
                   first_inning=("inning", "min"),
                   last_inning=("inning", "max"),
                   game_date=("game_date", "first"))
@@ -200,7 +222,8 @@ class WorkloadModel:
     """
 
     def __init__(self, support, league_pmf, league_mean, pitcher_means,
-                 pitcher_starts, league_k_per_bf, pitcher_k_rates):
+                 pitcher_starts, league_k_per_bf, pitcher_k_rates,
+                 new_pitcher_mean=None):
         self.support = support
         self.league_pmf = league_pmf
         self.league_mean = league_mean
@@ -208,6 +231,11 @@ class WorkloadModel:
         self.pitcher_starts = pitcher_starts    # how many starts back it
         self.league_k_per_bf = league_k_per_bf
         self.pitcher_k_rates = pitcher_k_rates  # shrunk K per batter faced
+        # Expected BF for a pitcher with no usable history. See
+        # NEW_PITCHER_MAX_PRIOR.
+        self.new_pitcher_mean = (float(new_pitcher_mean)
+                                 if new_pitcher_mean is not None
+                                 else float(league_mean))
 
     @classmethod
     def fit(cls, starts: pd.DataFrame, as_of=None,
@@ -240,16 +268,60 @@ class WorkloadModel:
         league_mean = float(usable["bf"].mean())
         k_per_bf = float(usable["k"].sum() / usable["bf"].sum())
 
+        # The prior mean is what a pitcher with little history faces, not
+        # what the league does -- see NEW_PITCHER_MAX_PRIOR. Prior-start
+        # counts are taken inside the window, which is also what the
+        # caller can know about a pitcher on the night.
+        #
+        # "Prior starts" counts the pitcher's whole cached history, not
+        # just the window: an established starter's first outing of the
+        # window is not a debut. Counting inside the window alone diluted
+        # the thin group with veterans and left the new-pitcher rate a
+        # hair under league, which the backtest exposed (thin pitchers
+        # still 0.5 K per start over their projection).
+        career = starts[~starts["is_opener"]].sort_values(
+            ["pitcher", "game_date", "game_pk"])
+        if as_of is not None:
+            career = career[career["game_date"] < as_of]
+        career = career.assign(prior_all=career.groupby("pitcher").cumcount())
+        in_window = career.index.isin(usable.index)
+        thin = career[(career["prior_all"] <= NEW_PITCHER_MAX_PRIOR) & in_window]
+        new_pitcher_mean = (float(thin["bf"].mean()) if len(thin) >= 30
+                            else league_mean)
+
+        # Which prior a pitcher gets depends on whether he IS new. A
+        # veteran with a short window sample is a veteran, and pulling him
+        # toward the call-up mean costs 0.3 batters faced across the
+        # established group (measured). So: career starts before the
+        # origin <= NEW_PITCHER_MAX_PRIOR -> new-pitcher priors; otherwise
+        # league priors. Unseen pitchers are new by definition.
+        career_starts = career.groupby("pitcher").size()
+        is_new = (career_starts <= NEW_PITCHER_MAX_PRIOR + 1)
+
         by_pitcher = usable.groupby("pitcher")["bf"]
         n = by_pitcher.size()
         raw = by_pitcher.mean()
-        shrunk = (raw * n + league_mean * BF_PRIOR_STARTS) / (n + BF_PRIOR_STARTS)
+        prior_bf = pd.Series(np.where(is_new.reindex(n.index).fillna(True),
+                                      new_pitcher_mean, league_mean), index=n.index)
+        shrunk = ((raw * n + prior_bf * BF_PRIOR_STARTS)
+                  / (n + BF_PRIOR_STARTS))
 
-        # Strikeout rate per batter faced, shrunk toward the league rate
-        # over the same window. The prior is in batters faced, so a
-        # pitcher needs roughly ten starts before his own rate leads.
+        # Strikeout rate per batter faced, shrunk toward the NEW-PITCHER
+        # rate over the same window -- the same argument as the batters
+        # faced prior above. A pitcher with little history is not an
+        # average starter with a small sample; he is a call-up or a
+        # swingman, and those strike out fewer hitters per batter faced.
+        # The 2026 rolling-origin backtest (backtest_k_props.py) showed
+        # pitchers with under five starts in the window running 0.55 K per
+        # start over their projection when shrunk toward the league rate.
+        # The prior is in batters faced, so a pitcher needs roughly ten
+        # starts before his own rate leads.
+        thin_k = (float(thin["k"].sum() / thin["bf"].sum())
+                  if len(thin) >= 30 and thin["bf"].sum() > 0 else k_per_bf)
         totals = usable.groupby("pitcher").agg(k=("k", "sum"), bf=("bf", "sum"))
-        k_rates = ((totals["k"] + K_PRIOR_BF * k_per_bf)
+        prior_k = pd.Series(np.where(is_new.reindex(totals.index).fillna(True),
+                                     thin_k, k_per_bf), index=totals.index)
+        k_rates = ((totals["k"] + K_PRIOR_BF * prior_k)
                    / (totals["bf"] + K_PRIOR_BF))
 
         if verbose:
@@ -258,18 +330,26 @@ class WorkloadModel:
             print(f"  Workload model: {len(usable):,} starts, {span}, "
                   f"{usable['pitcher'].nunique()} pitchers.")
             print(f"    League: {league_mean:.2f} batters faced, "
-                  f"{k_per_bf:.4f} K per batter.")
+                  f"{k_per_bf:.4f} K per batter; a pitcher with <= "
+                  f"{NEW_PITCHER_MAX_PRIOR} prior starts faces "
+                  f"{new_pitcher_mean:.2f} at {thin_k:.4f} K per batter "
+                  f"(the shrinkage targets).")
             print(f"    Excluded {int(starts['is_opener'].sum())} opener "
                   f"or short outings.")
-        return cls(support, league_pmf, league_mean, shrunk.to_dict(),
-                   n.to_dict(), k_per_bf, k_rates.to_dict())
+        model = cls(support, league_pmf, league_mean, shrunk.to_dict(),
+                    n.to_dict(), k_per_bf, k_rates.to_dict(),
+                    new_pitcher_mean=new_pitcher_mean)
+        model.new_pitcher_k = float(thin_k)
+        return model
 
     def expected_bf(self, pitcher_id) -> float:
-        return float(self.pitcher_means.get(pitcher_id, self.league_mean))
+        return float(self.pitcher_means.get(pitcher_id, self.new_pitcher_mean))
 
     def k_rate(self, pitcher_id) -> float:
-        """Shrunk strikeouts per batter faced for this pitcher."""
-        return float(self.pitcher_k_rates.get(pitcher_id, self.league_k_per_bf))
+        """Shrunk strikeouts per batter faced for this pitcher. A pitcher
+        never seen gets the new-pitcher rate, not the league's."""
+        return float(self.pitcher_k_rates.get(
+            pitcher_id, getattr(self, "new_pitcher_k", self.league_k_per_bf)))
 
     def starts_seen(self, pitcher_id) -> int:
         return int(self.pitcher_starts.get(pitcher_id, 0))
@@ -346,6 +426,90 @@ def k_count_distribution(p_by_batter, support, bf_probs,
         total += mw * out
     s = total.sum()
     return total / s if s > 0 else total
+
+
+def _odds(p):
+    p = np.clip(np.asarray(p, dtype=float), 1e-6, 1 - 1e-6)
+    return p / (1.0 - p)
+
+
+def per_batter_k_probs(batter_rates, batter_league: float,
+                       pitcher_rate: float, platoon_factor=1.0) -> np.ndarray:
+    """
+    The per-batter-faced strikeout probability the K prop compounds.
+
+    THIS IS THE NUMBER THE BACKTEST VALIDATED, NOW ON THE DEPLOYED PATH
+    -------------------------------------------------------------------
+    Until 2026-09-05, predict_slate walked the lineup with the HITTER
+    model's `p_is_k_vs_starter` -- a logistic regression whose pitcher input
+    was the starter's career strikeout rate since 2022, no trailing window,
+    shrunk toward a 2022-2026 league mean. `WorkloadModel.k_rate`, the
+    12-month rate this module fits and the backtest scored, was computed
+    and then only written to the CSV. On the 9/01 and 9/04 slates the two
+    agreed at Spearman 0.65 and the deployed rate carried 1.7x the spread;
+    live skill on 32 starts was -0.14 against a backtest of +0.06. Stale
+    input, wider spread, confident and wrong at the extremes.
+
+    log5 WITH SEPARATE BASELINES
+    ----------------------------
+    The hitter's rate is measured against the pitchers HE faced (his own
+    pool table); the pitcher's rate is measured against the 12-month
+    starter league in this module. Plain log5 assumes one shared baseline,
+    so it is written out:
+
+        odds(p) = [odds(batter) / odds(batter_league)] x odds(pitcher) x platoon
+
+    The bracket is the hitter's odds ratio -- how much more or less he
+    strikes out than his league. Multiplying the pitcher's own odds by it
+    lands the answer in the PITCHER's league, which is the one the batters
+    faced distribution and K_DISPERSION_SD were fitted in. A league-average
+    hitter leaves the pitcher's rate untouched, which is the sanity check.
+
+    `platoon_factor` is an odds multiplier for the handedness matchup,
+    measured by the caller from its own plate-appearance table (same-hand
+    versus opposite-hand strikeout odds, relative to overall). Pass 1.0 to
+    ignore it.
+    """
+    ratio = _odds(batter_rates) / _odds(batter_league)
+    odds = ratio * _odds(pitcher_rate) * np.asarray(platoon_factor, dtype=float)
+    return odds / (1.0 + odds)
+
+
+def starter_exposure_by_slot(support, bf_probs, n_slots: int = 9) -> np.ndarray:
+    """
+    Expected number of times the starter faces each lineup slot.
+
+    Not a model. The starter faces batters 1, 2, 3, ... up to BF, and
+    batter n is lineup slot ((n - 1) mod 9) + 1. So for a given BF the count
+    for slot s is exact:
+
+        #{ n <= BF : (n - 1) mod 9 == s - 1 }
+
+        BF = 22   slots 1-4 face him 3 times, slots 5-9 twice
+        BF = 27   every slot 3 times
+        BF = 18   every slot twice
+
+    Averaged over the batters-faced distribution, that is each slot's
+    expected exposure to the starter. Divided by the slot's expected plate
+    appearances it is the starter SHARE that `blend_with_bullpen` needs --
+    per pitcher and per slot, instead of the single 0.528 constant that was
+    applied to every hitter against every starter. An ace at 26 BF gives
+    the leadoff hitter ~0.66; a five-inning starter at 19 gives the
+    9-hitter ~0.55. pitcher_data.py's own table puts the constant's cost at
+    +/-5 points of home-run probability at the extremes.
+
+    Returns an array indexed 0..n_slots-1 (slot 1 at index 0).
+    """
+    support = np.asarray(support, dtype=int)
+    bf_probs = np.asarray(bf_probs, dtype=float)
+    bf_probs = bf_probs / bf_probs.sum()
+    out = np.zeros(n_slots)
+    for bf, w in zip(support, bf_probs):
+        full, rem = divmod(int(bf), n_slots)
+        counts = np.full(n_slots, full, dtype=float)
+        counts[:rem] += 1.0
+        out += w * counts
+    return out
 
 
 def prob_over(k_dist: np.ndarray, line: float) -> float:

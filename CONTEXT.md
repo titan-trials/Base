@@ -14,6 +14,139 @@ real, useful outcome of the project, not a failure to fix.
 
 ---
 
+## V10 (Sep 5, 2026) — a review, fourteen fixes, and one self-inflicted wound
+
+A full read of the code against the docs (`model-review-2026-09-05.md`,
+also in the project). Everything below was rated by severity and fixed in
+that order. Every correctness fix is live; every *modelling* change is
+behind a flag in `model_flags.py`, default off, with `flag_lab.py` to
+decide.
+
+### Severity 1 — deployed code that was not what was validated
+
+**The K prop compounded an untested rate.** `build_pitcher_props` walked
+the lineup with the hitter LR's `p_is_k_vs_starter`, whose pitcher input
+was the starter's career rate since 2022 with no window. The 12-month
+shrunk `WorkloadModel.k_rate` the K doc validated was computed and only
+written to the CSV. On the 9/01 and 9/04 slates the two agreed at
+Spearman 0.65 and the deployed one had 1.7x the spread; live skill on 32
+starts was **-0.14** against a backtest of +0.06.
+
+Now: `per_batter_k_probs` = the hitter's shrunk 600-PA strikeout odds
+ratio (against a 12-month hitter-side league) x the pitcher's 12-month
+shrunk odds x a measured platoon factor. `backtest_k_props.py` runs THAT
+path, rolling origin, one month at a time, on 2,834 starts Apr-Aug 2026:
+
+| line | said | did | Brier skill |
+|---|---|---|---|
+| over 4.5 | 0.562 | 0.556 | +0.074 |
+| **over 5.5** | 0.405 | 0.393 | **+0.094** |
+| **over 6.5** | 0.266 | 0.256 | **+0.097** |
+| over 7.5 | 0.157 | 0.152 | +0.076 |
+
+Every month positive (+0.057 to +0.135 at 5.5). The lineup walk beats a
+flat per-pitcher rate by ~+0.01 in every month. The old backtest script
+was never committed; this one is, and score_slate now splits the pitcher
+running total at 2026-09-05 so the two paths are never pooled.
+
+**Thin pitchers.** A pitcher with no history got the league mean, 22.7
+batters faced. Measured on career-thin starts (<= 2 prior starts in the
+cache) the number is ~21.0 and the K rate is lower too. Both priors are
+now the new-pitcher values for new pitchers and league for veterans --
+one version pulled veterans toward the call-up mean and cost 0.3 BF
+across the established group, which the backtest caught. Thin pitchers
+went from -0.04 to about -0.00 Brier skill; `compare_market` no longer
+ranks them in the edge list (`MIN_STARTS_FOR_EDGE = 5`).
+
+**PA projection had train/serve skew.** `batter_pa_mean_20` was a 20-game
+rolling mean at fit time and the all-time mean at serving time;
+`team_pa_mean_20` was grouped by the VENUE's team at fit time and set
+equal to the batter's mean at serving time. Replaced by
+`EmpiricalPAModel`: P(PA = k | slot, home/away) counted from starters'
+games since 2024 -- eighteen cells, thousands of games each, nothing to
+skew. Two honest notes: (1) part of V8c's "leadoff over-projected" was a
+pool-versus-all-players comparison -- pool hitters in slot 1 really do
+average 4.5 PA against 4.3 for all starters, because regulars are not
+lifted late; (2) the spread still came down, 1.14 -> 1.03, matching the
+pool's own history.
+
+### Severity 2 — deployed and biased
+
+**Starter share per pitcher and per slot.** `blend_with_bullpen` used
+0.528 for everyone. The starter faces batters 1..BF and slot s gets
+#{n <= BF : n = s mod 9} of them -- exact arithmetic, marginalised over
+the workload model's BF distribution, divided by the slot's expected PA.
+An ace at 26 BF gives the leadoff hitter ~0.66; a five-inning starter
+gives the 9-hitter ~0.55. Exported as `starter_share` on the slate.
+
+**Team model.** Bench share: the lineup sum omits pinch hitters and subs,
+measured at **7.9% of runs** on 1,886 games with both lineups complete
+(the first cut used incomplete-lineup games and said 17%). Lineup sums
+are divided by (1 - share). Home-field: the run gap (+0.085 home) is
+measured and printed but NOT applied -- `is_home` is already in every
+per-PA model and in the PA table, so applying it again double-counts.
+`score_slate.score_teams` grades win probability and totals against
+final scores, logs `cache/team_scoring_log.csv`, reports the home-side
+residual, and compares to the closing moneyline/total when
+`python -m data.odds_lines DATE gamelines` was run (2 credits for the
+whole slate via the featured-markets endpoint).
+
+**Park factors.** `ATH -> OAK -> 92` sent the Athletics' home games to the
+Coliseum two seasons after they left it. ATH now has its own entry (108,
+Sutter Health Park -- check against Savant's current figure).
+
+### Severity 3 — small correctness
+
+- **Off-by-one on tonight's features.** Rolling columns are `.shift(1)`,
+  and features were read off each hitter's last real row, so every
+  hitter's most recent plate appearance was excluded every night.
+  `add_tonight_rows` appends one outcome-less row per slate hitter before
+  the rolling features run and reads tonight from that.
+- **Pitcher rolling rates** had no within-game order (could see later PAs
+  from the same game in training). Sorted by at_bat_number.
+- **PA definition.** `events.notna()` counted `truncated_pa` and
+  baserunning events as plate appearances; `is_k` missed
+  `strikeout_double_play`. Whitelisted. Verified against boxscores:
+  934 of the 940 player-games where Statcast ran one PA over the boxscore
+  were `truncated_pa`; the tables now match to 0.006 PA per game.
+- **Unshrunk inputs.** Per-batter OBP, RBI rate, and the RBI model's
+  career HR/hit rates (`fillna(0)` for a debut hitter) were raw means
+  next to an engine that shrinks everything. Now shrunk with the same
+  estimator (`estimate_prior_strength_counts` for RBI).
+
+### Modelling flags -- built, measured, default OFF (`model_flags.py`)
+
+`flag_lab.py`, held-out from 2025-09-20, 581k plate appearances:
+
+| flag | result |
+|---|---|
+| LOGIT_FEATURES | +0.0002 to +0.0003 skill on HR/K/walk, CIs exclude 0, ECE down -- real and negligible |
+| PLATOON_SPLIT | negligible |
+| LEAGUE_PRIOR_TRAILING_DAYS=365 | negligible (the LR intercept absorbs it) |
+| PITCHER_RATE_WINDOW_DAYS=365 | is_k **BETTER** +0.0007 [+0.0002, +0.0011]; walks -0.0003 |
+| **PER_HITTER_SHAPE** | total bases, game level, PA fixed: **+0.0069** at 0.5, +0.0022 at 1.5, +0.0017 at 3.5, all CIs exclude 0 |
+
+PER_HITTER_SHAPE is the one that clearly earns its place. Turning it on
+changes the TB lines and therefore the running total; do it deliberately.
+
+### The wound
+
+`test_slate_dryrun.py` wrote its fabricated lineup slots to the LIVE
+`cache/lineup_slots.csv` -- it always had -- and running it during this
+session destroyed the real file (222k rows fetched from boxscores over
+weeks). Recovery: `rebuild_lineup_slots.py` reconstructs lineups exactly
+from the Statcast caches (a side's first nine distinct batters in
+at_bat_number order, written only when every PA up to the ninth is
+present) -- validated 100.00% against the 44,840 real rows in
+`_pa_export.csv`, and covering 3,349 games with both lineups (1,428 of
+2026). The rest refill through the normal boxscore fetcher on the next
+run. The test now writes to `cache/_dryrun_lineup_slots.csv`, patches
+`cache_path` so predict_slate reads that too, uses the All-Star break
+Monday as its date, and cleans up. Same lesson as V8d: a test that can
+touch the record it exists to protect will eventually do so.
+
+---
+
 ## V9 (Aug 18, 2026) — two negative results, recorded so they aren't redone
 
 Both experiments lived in standalone files that import the pipeline and

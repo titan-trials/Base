@@ -178,8 +178,39 @@ check("a pitcher with 30 starts keeps most of his own mean",
       deep > 25.0, f"{deep:.2f} against a raw 27")
 check("a pitcher with 2 starts is pulled hard toward the league",
       thin < deep - 1.0, f"2 starts -> {thin:.2f}, 30 starts -> {deep:.2f}")
-check("an unknown pitcher gets the league mean exactly",
-      abs(wm.expected_bf(999999) - wm.league_mean) < 1e-12)
+# Changed 2026-09-05: an unknown pitcher gets the NEW-PITCHER mean -- what
+# starters with <= NEW_PITCHER_MAX_PRIOR prior starts in the window
+# actually faced -- not the league mean. See pitcher_workload.py.
+check("an unknown pitcher gets the new-pitcher mean exactly",
+      abs(wm.expected_bf(999999) - wm.new_pitcher_mean) < 1e-12,
+      f"{wm.expected_bf(999999):.3f} vs {wm.new_pitcher_mean:.3f}")
+check("the new-pitcher mean is at or below the league mean here",
+      wm.new_pitcher_mean <= wm.league_mean + 1e-9,
+      f"{wm.new_pitcher_mean:.3f} vs league {wm.league_mean:.3f}")
+
+# --- per_batter_k_probs and starter_exposure_by_slot (2026-09-05) ------
+from features.pitcher_workload import per_batter_k_probs, starter_exposure_by_slot
+p_avg = per_batter_k_probs([0.22], 0.22, 0.30)
+check("a league-average hitter leaves the pitcher's rate untouched",
+      abs(float(p_avg[0]) - 0.30) < 1e-12, f"{float(p_avg[0]):.6f}")
+p_hi = per_batter_k_probs([0.30], 0.22, 0.30)
+p_lo = per_batter_k_probs([0.15], 0.22, 0.30)
+check("a high-K hitter raises it and a low-K hitter lowers it",
+      float(p_hi[0]) > 0.30 > float(p_lo[0]))
+p_plat = per_batter_k_probs([0.22], 0.22, 0.30, platoon_factor=1.2)
+check("the platoon factor multiplies the odds",
+      abs(float(p_plat[0]) / (1 - float(p_plat[0])) - 1.2 * 0.30 / 0.70) < 1e-12)
+
+exp = starter_exposure_by_slot(np.array([22]), np.array([1.0]))
+check("BF=22 gives slots 1-4 three PAs and 5-9 two",
+      np.allclose(exp, [3, 3, 3, 3, 2, 2, 2, 2, 2]), str(exp))
+exp = starter_exposure_by_slot(np.array([18, 27]), np.array([0.5, 0.5]))
+check("exposure averages over the BF distribution",
+      np.allclose(exp, [2.5] * 9), str(exp))
+check("exposure sums to expected BF",
+      abs(starter_exposure_by_slot(np.array([19, 23, 26]),
+                                   np.array([0.2, 0.5, 0.3])).sum()
+          - (19 * 0.2 + 23 * 0.5 + 26 * 0.3)) < 1e-9)
 
 d = np.zeros(12)
 d[4] = d[5] = d[6] = d[7] = 0.25

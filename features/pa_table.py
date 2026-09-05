@@ -68,6 +68,26 @@ WALK_EVENTS = {"walk", "hit_by_pitch"}
 # hits or walks, so they get their own set rather than being folded in.
 OTHER_REACH_EVENTS = {"field_error", "fielders_choice", "catcher_interf"}
 REACH_EVENTS = HIT_EVENTS | WALK_EVENTS | OTHER_REACH_EVENTS
+K_EVENTS = {"strikeout", "strikeout_double_play"}
+
+# Events Statcast stamps on a pitch that do NOT end the batter's plate
+# appearance. Baserunning outcomes and feed advisories; see build_pa_table.
+NON_PA_EVENTS = {
+    "caught_stealing_2b", "caught_stealing_3b", "caught_stealing_home",
+    "pickoff_1b", "pickoff_2b", "pickoff_3b",
+    "pickoff_caught_stealing_2b", "pickoff_caught_stealing_3b",
+    "pickoff_caught_stealing_home", "pickoff_error_1b", "pickoff_error_2b",
+    "pickoff_error_3b",
+    "stolen_base_2b", "stolen_base_3b", "stolen_base_home",
+    "wild_pitch", "passed_ball", "other_advance", "runner_double_play",
+    "game_advisory", "ejection", "batter_timeout", "mound_visit",
+    "no_play", "cs_double_play", "pickoff_double_play",
+    # A plate appearance cut off by an inning-ending baserunning play.
+    # The official boxscore does not count it (verified: 934 of the 940
+    # player-games where the Statcast count ran one over the boxscore
+    # were exactly this), so neither does this table.
+    "truncated_pa",
+}
 
 # Bases credited per event, for the total-bases prop. Kept here rather
 # than imported from features/bases_features.py so build_pa_table has no
@@ -83,6 +103,7 @@ PA_COLUMNS = [
     # is recoverable. With only home_team, a home batter's opponent is
     # unknowable, and team-level bullpen rates cannot be measured at all.
     "stand", "p_throws", "home_team", "away_team", "is_home", "platoon_edge",
+    "same_hand_lhb", "same_hand_rhb",
     # Needed to tell a starting pitcher from a reliever. `inning` gives the
     # definition (whoever pitched in the first) and `at_bat_number` gives
     # the ordering. Both were dropped here for several versions, which left
@@ -131,7 +152,16 @@ def build_pa_table(statcast_df: pd.DataFrame) -> pd.DataFrame:
         )
 
     # The resolving pitch of each plate appearance.
-    pa = df[df["events"].notna()].copy()
+    #
+    # `events` non-null is NOT quite "a plate appearance ended here". A
+    # runner caught stealing for the third out, a pickoff, a stolen base
+    # that ends an inning, and MLB's `game_advisory` rows all carry an
+    # event on a pitch where the batter's plate appearance did not
+    # resolve. Until 2026-09-05 those were counted as plate appearances
+    # with an out's worth of nothing in every outcome column -- a small,
+    # one-directional deflation of every rate and inflation of every PA
+    # count. Filtered by name rather than by `notna()`.
+    pa = df[df["events"].notna() & ~df["events"].isin(NON_PA_EVENTS)].copy()
     if pa.empty:
         raise ValueError(
             "No completed plate appearances found (all `events` are null). "
@@ -141,7 +171,9 @@ def build_pa_table(statcast_df: pd.DataFrame) -> pd.DataFrame:
     pa["is_hr"] = (pa["events"] == "home_run").astype(int)
     pa["is_hit"] = pa["events"].isin(HIT_EVENTS).astype(int)
     pa["is_walk"] = pa["events"].isin(WALK_EVENTS).astype(int)
-    pa["is_k"] = (pa["events"] == "strikeout").astype(int)
+    # Both spellings. A strikeout on which a runner is also thrown out is
+    # recorded as `strikeout_double_play` and is still a strikeout.
+    pa["is_k"] = pa["events"].isin(K_EVENTS).astype(int)
 
     if {"post_bat_score", "bat_score"}.issubset(pa.columns):
         pa["rbi"] = (pa["post_bat_score"] - pa["bat_score"]).clip(lower=0)
@@ -212,6 +244,10 @@ def build_pa_table(statcast_df: pd.DataFrame) -> pd.DataFrame:
     # ball longer and hits meaningfully better. One of the few genuinely
     # large, genuinely stable effects in baseball, and it's free here.
     pa["platoon_edge"] = (pa["stand"] != pa["p_throws"]).astype(int)
+    # Same-hand indicators by batter side, for model_flags.PLATOON_SPLIT.
+    same = pa["stand"] == pa["p_throws"]
+    pa["same_hand_lhb"] = (same & (pa["stand"] == "L")).astype(int)
+    pa["same_hand_rhb"] = (same & (pa["stand"] == "R")).astype(int)
 
     sort_cols = [c for c in ["batter", "game_date", "game_pk", "at_bat_number"]
                  if c in pa.columns]

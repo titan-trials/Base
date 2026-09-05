@@ -364,13 +364,115 @@ def fetch_slate_odds(game_date: str, markets: str = DEFAULT_MARKET,
     return lines
 
 
+# ---------------------------------------------------------------------
+# Game lines: moneyline and total, for the whole slate at once
+# ---------------------------------------------------------------------
+#
+# The featured-markets endpoint returns EVERY game in one response and
+# is charged per market per region, not per event:
+#
+#     h2h + totals, one region  =  2 credits for the whole slate
+#
+# against ~30 for one night of pitcher strikeouts. This is what makes
+# the team model gradeable against the market for nearly nothing. Cached
+# to cache/gamelines_{date}.csv with one row per game: de-vigged home win
+# probability, the consensus total, and the de-vigged over probability at
+# that total.
+GAME_LINE_MARKETS = "h2h,totals"
+
+
+def fetch_game_lines(game_date: str, regions: str = DEFAULT_REGIONS,
+                     verbose: bool = True) -> pd.DataFrame:
+    """Moneylines and totals for one date. Costs 2 credits."""
+    api_key = load_api_key()
+    url = (f"{BASE}/sports/{SPORT}/odds?apiKey={api_key}&regions={regions}"
+           f"&markets={GAME_LINE_MARKETS}&oddsFormat=american")
+    payload, headers = _get(url)
+    if not payload:
+        print("  No game lines came back.")
+        return pd.DataFrame()
+
+    target = pd.Timestamp(game_date).date()
+    rows = []
+    for event in payload:
+        start = pd.to_datetime(event.get("commence_time"), utc=True)
+        if start.tz_convert("America/New_York").date() != target:
+            continue
+        home, away = event.get("home_team"), event.get("away_team")
+        for book in event.get("bookmakers") or []:
+            h2h, totals = {}, {}
+            for market in book.get("markets") or []:
+                for outcome in market.get("outcomes") or []:
+                    name = outcome.get("name")
+                    if market.get("key") == "h2h":
+                        h2h[name] = american_to_prob(outcome.get("price"))
+                    elif market.get("key") == "totals":
+                        totals.setdefault(outcome.get("point"), {})[
+                            (name or "").lower()] = american_to_prob(outcome.get("price"))
+            if home in h2h and away in h2h:
+                rows.append({"event_id": event.get("id"),
+                             "commence_time": event.get("commence_time"),
+                             "home_team": home, "away_team": away,
+                             "bookmaker": book.get("key"), "market": "h2h",
+                             "line": np.nan,
+                             "prob": devig_two_way(h2h[home], h2h[away]),
+                             "hold": h2h[home] + h2h[away] - 1.0})
+            for point, sides in totals.items():
+                if point is None or "over" not in sides or "under" not in sides:
+                    continue
+                rows.append({"event_id": event.get("id"),
+                             "commence_time": event.get("commence_time"),
+                             "home_team": home, "away_team": away,
+                             "bookmaker": book.get("key"), "market": "totals",
+                             "line": float(point),
+                             "prob": devig_two_way(sides["over"], sides["under"]),
+                             "hold": sides["over"] + sides["under"] - 1.0})
+    if not rows:
+        print(f"  No two-sided game lines for {game_date}.")
+        return pd.DataFrame()
+
+    raw = pd.DataFrame(rows)
+    ml = (raw[raw["market"] == "h2h"]
+          .groupby("event_id", as_index=False)
+          .agg(home_team=("home_team", "first"), away_team=("away_team", "first"),
+               commence_time=("commence_time", "first"),
+               home_win_prob_market=("prob", "median"),
+               ml_books=("bookmaker", "nunique"), ml_hold=("hold", "median")))
+    tot = raw[raw["market"] == "totals"]
+    if not tot.empty:
+        # The consensus total is the most-quoted line; the over probability
+        # is the median across books AT that line, so a book hanging 8.5
+        # while the rest are at 9 does not pull the number sideways.
+        main_line = (tot.groupby("event_id")["line"]
+                        .agg(lambda s: s.value_counts().idxmax()).rename("total_line"))
+        tot = tot.join(main_line, on="event_id")
+        tot = tot[tot["line"] == tot["total_line"]]
+        tot = (tot.groupby("event_id", as_index=False)
+                  .agg(total_line=("line", "first"),
+                       over_prob_market=("prob", "median"),
+                       total_books=("bookmaker", "nunique")))
+        ml = ml.merge(tot, on="event_id", how="left")
+    ml["game_date"] = game_date
+    ml["fetched_at_utc"] = pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    ml.to_csv(cache_path(f"gamelines_{game_date}"), index=False)
+    if verbose:
+        print(f"  {len(ml)} games. Home favourites: "
+              f"{(ml['home_win_prob_market'] > 0.5).mean():.0%}. "
+              f"Credits remaining: {headers.get('x-requests-remaining')}")
+        print(f"  Saved to cache/gamelines_{game_date}.csv")
+    return ml
+
+
 if __name__ == "__main__":
     import sys
     date = sys.argv[1] if len(sys.argv) > 1 else None
     if not date:
         raise SystemExit("Usage: python -m data.odds_lines YYYY-MM-DD "
-                         "[market]")
+                         "[market | gamelines]")
     market = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_MARKET
+    if market == "gamelines":
+        fetch_game_lines(date)
+        raise SystemExit(0)
     if market not in KNOWN_MARKETS:
         print(f"  Note: '{market}' is not one of {KNOWN_MARKETS}. "
               f"Sending it anyway.")

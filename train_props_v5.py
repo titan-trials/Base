@@ -228,11 +228,48 @@ def train_rate_model(train_pa, cols, target):
     name.
     """
     model = Pipeline([
+        ("link", RateLogitTransformer()),
         ("scale", StandardScaler()),
         ("clf", LogisticRegression(max_iter=3000, C=MODEL_C)),
     ])
     model.fit(train_pa[cols], train_pa[target])
     return model
+
+
+class RateLogitTransformer:
+    """
+    Feeds rate columns (bat_*, pit_*_allowed, matchup_*) to the logistic
+    regression as logit(p) instead of p, when model_flags.LOGIT_FEATURES
+    is set; otherwise passes everything through untouched. Column
+    identity is decided at fit time from the DataFrame's names, so the
+    same fitted pipeline transforms predict-time frames identically.
+    """
+
+    def __init__(self):
+        self.rate_cols_ = []
+        self.enabled_ = False
+
+    def fit(self, X, y=None):
+        import model_flags
+        self.enabled_ = bool(model_flags.LOGIT_FEATURES)
+        self.rate_cols_ = [c for c in getattr(X, "columns", [])
+                           if c.startswith(("bat_", "pit_", "matchup_"))]
+        return self
+
+    def transform(self, X):
+        if not self.enabled_ or not hasattr(X, "columns"):
+            return X
+        out = X.copy()
+        for c in self.rate_cols_:
+            p = np.clip(out[c].astype(float), 1e-4, 1 - 1e-4)
+            out[c] = np.log(p / (1.0 - p))
+        return out
+
+    def get_params(self, deep=True):
+        return {}
+
+    def set_params(self, **kw):
+        return self
 
 
 def main():

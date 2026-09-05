@@ -131,3 +131,9 @@ desktop.ini
 *.log
 chart_check*.png
 /tmp/
+
+# 2026-09-05: the game-page grade (score_slate.score_teams) and the
+# closing moneyline/total it is compared to. Same rule as the others --
+# a record that accumulates has to be tracked.
+!cache/team_scoring_log.csv
+!cache/gamelines_*.csv
