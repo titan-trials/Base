@@ -61,7 +61,14 @@ PLATOON_SPLIT = False
 # bases shape is built per hitter from his shrunk single/double/triple/HR
 # mix (bases_features already estimates it) with p_is_hr and p_is_hit as
 # the anchors.
-PER_HITTER_SHAPE = False
+# ON since 2026-09-06. flag_lab.py --origins 3 (246k PAs, cuts
+# 2024-08-29 / 2025-05-26 / 2025-08-27, 57,447 player-games):
+# TB over 0.5 +0.0066/+0.0065/+0.0069, over 1.5 +0.0018/+0.0019/+0.0021,
+# CIs excluding zero at every origin; over 2.5 a no-op (|gain| <= 0.0002,
+# floor 0.0005); over 3.5 positive but CI includes zero. Worse on nothing.
+# NOTE: scoring_log rows before 2026-09-06 were produced with this OFF,
+# so pooled total-bases numbers mix two models across that date.
+PER_HITTER_SHAPE = True
 
 
 def rate_feature_transform(values):
