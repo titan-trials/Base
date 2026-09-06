@@ -149,6 +149,35 @@ def compare_pitchers(game_date: str, verbose: bool = True) -> pd.DataFrame:
         return pd.DataFrame()
 
     props["key"] = props["pitcher"].map(normalise_name)
+
+    # Drop pitchers whose game had already started when the odds were
+    # captured.
+    #
+    # data/odds_lines now skips started games before spending a credit, so
+    # a file captured after this change has nothing to drop. Files captured
+    # before it do -- 2026-09-06 was fetched at 17:51 UTC on a slate whose
+    # first pitch was 16:10, so seven games were priced in-play and would
+    # otherwise be graded as closing lines. A benchmark that quietly
+    # includes post-first-pitch prices flatters or damns the model for
+    # reasons that have nothing to do with the model.
+    if "start_time_utc" in props.columns and "fetched_at_utc" in market.columns:
+        fetched = pd.to_datetime(market["fetched_at_utc"].iloc[0], utc=True,
+                                 errors="coerce")
+        starts = pd.to_datetime(props["start_time_utc"], utc=True,
+                                errors="coerce")
+        if pd.notna(fetched):
+            late = starts <= fetched
+            if late.any():
+                dropped = props.loc[late, "pitcher"].tolist()
+                props = props[~late]
+                print(f"  Excluded {len(dropped)} pitcher(s) whose game had "
+                      f"already started when the odds were captured "
+                      f"({fetched.strftime('%H:%M')} UTC): "
+                      f"{', '.join(dropped[:4])}"
+                      f"{' ...' if len(dropped) > 4 else ''}")
+                print(f"  Those prices are in-play, not closing. The rest of "
+                      f"the slate is unaffected.")
+
     merged = market.merge(
         props[["key", "pitcher", "team", "opponent", "expected_k",
                "expected_bf", "starts_seen", "k_dist"]],

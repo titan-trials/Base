@@ -324,10 +324,35 @@ def fetch_slate_odds(game_date: str, markets: str = DEFAULT_MARKET,
               f"no credits spent.")
         return pd.DataFrame()
 
+    # Games already underway are dropped BEFORE any request is made.
+    #
+    # The player-props endpoint is charged per event, so a started game
+    # costs a credit to fetch and the line it returns is unusable -- an
+    # in-play or pulled price that cannot be a closing line. Skipping it
+    # is the same exclusion, and it keeps the credit for a night when the
+    # game has not started. Everything left in odds_{date}.csv is
+    # pre-game by construction.
+    #
+    # This is the one input that cannot be re-fetched. Predictions are
+    # protected after the fact by preserve_committed_rows; odds have no
+    # equivalent, so the guard has to be here.
+    now = pd.Timestamp.utcnow()
+    started = [e for e in events
+               if pd.to_datetime(e.get("commence_time"), utc=True) <= now]
+    events = [e for e in events if e not in started]
+    if started and verbose:
+        print(f"  Skipping {len(started)} game(s) already underway -- their "
+              f"prices are no longer pre-game. {len(started)} credit(s) not "
+              f"spent.")
+    if not events:
+        print(f"  Every game on {game_date} has started. Nothing fetched, "
+              f"no credits spent.")
+        return pd.DataFrame()
+
     n_markets = len([m for m in markets.split(",") if m.strip()])
     n_regions = len([r for r in regions.split(",") if r.strip()])
     if verbose:
-        print(f"  {len(events)} events for {game_date}.")
+        print(f"  {len(events)} event(s) still to start for {game_date}.")
         print(f"  Markets: {markets} | regions: {regions}")
         print(f"  Estimated cost: {len(events)} x {n_markets} x {n_regions} "
               f"= up to {len(events) * n_markets * n_regions} credits "
