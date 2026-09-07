@@ -160,9 +160,15 @@ def compare_pitchers(game_date: str, verbose: bool = True) -> pd.DataFrame:
     # otherwise be graded as closing lines. A benchmark that quietly
     # includes post-first-pitch prices flatters or damns the model for
     # reasons that have nothing to do with the model.
+    #
+    # The odds file can hold SEVERAL capture times now that late runs merge
+    # into it rather than replacing it, so the comparison is against the
+    # latest capture -- the one that could have seen a game start. Reading
+    # row zero would judge every price by whenever the first one happened
+    # to be taken.
     if "start_time_utc" in props.columns and "fetched_at_utc" in market.columns:
-        fetched = pd.to_datetime(market["fetched_at_utc"].iloc[0], utc=True,
-                                 errors="coerce")
+        fetched = pd.to_datetime(market["fetched_at_utc"], utc=True,
+                                 errors="coerce").max()
         starts = pd.to_datetime(props["start_time_utc"], utc=True,
                                 errors="coerce")
         if pd.notna(fetched):

@@ -307,6 +307,41 @@ def consensus(rows: pd.DataFrame) -> pd.DataFrame:
                               ascending=[True, True, False])
 
 
+def _merge_capture(fresh: pd.DataFrame, path: str, keys: list,
+                   verbose: bool = True) -> pd.DataFrame:
+    """
+    Add a capture to whatever is already on disk instead of replacing it.
+
+    Overwriting was safe only while every run fetched the whole slate.
+    Now that started games are skipped to save credits, a late run returns
+    ONLY the games still to come -- and a plain to_csv would replace a full
+    slate with those few. That is exactly backwards: the rows it deletes
+    are pre-game prices already paid for, and they cannot be re-fetched at
+    any price.
+
+    So: rows for a game not in this capture are kept as they were, and a
+    game present in both takes the NEW row, because a later pre-game price
+    is a better closing line than an earlier one. Each row carries its own
+    fetched_at_utc, so a file can legitimately hold several capture times
+    and anything reading it can tell which price was taken when.
+    """
+    if not os.path.exists(path):
+        return fresh
+    try:
+        previous = pd.read_csv(path)
+    except Exception:
+        return fresh
+    if previous.empty or not set(keys).issubset(previous.columns):
+        return fresh
+    combined = pd.concat([previous, fresh], ignore_index=True)
+    combined = combined.drop_duplicates(subset=keys, keep="last")
+    kept = len(combined) - len(fresh)
+    if verbose and kept > 0:
+        print(f"  Kept {kept} earlier row(s) for games already underway; "
+              f"{len(fresh)} refreshed. File now holds {len(combined)}.")
+    return combined
+
+
 def fetch_slate_odds(game_date: str, markets: str = DEFAULT_MARKET,
                      regions: str = DEFAULT_REGIONS,
                      verbose: bool = True) -> pd.DataFrame:
@@ -379,7 +414,10 @@ def fetch_slate_odds(game_date: str, markets: str = DEFAULT_MARKET,
     lines = consensus(raw)
     lines["game_date"] = game_date
     lines["fetched_at_utc"] = pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    lines.to_csv(cache_path(f"odds_{game_date}"), index=False)
+    out_path = cache_path(f"odds_{game_date}")
+    lines = _merge_capture(lines, out_path, ["market", "player", "line"],
+                           verbose)
+    lines.to_csv(out_path, index=False)
 
     if verbose:
         print(f"\n  {len(lines)} lines from {raw['bookmaker'].nunique()} "
@@ -479,7 +517,9 @@ def fetch_game_lines(game_date: str, regions: str = DEFAULT_REGIONS,
         ml = ml.merge(tot, on="event_id", how="left")
     ml["game_date"] = game_date
     ml["fetched_at_utc"] = pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    ml.to_csv(cache_path(f"gamelines_{game_date}"), index=False)
+    gl_path = cache_path(f"gamelines_{game_date}")
+    ml = _merge_capture(ml, gl_path, ["event_id"], verbose)
+    ml.to_csv(gl_path, index=False)
     if verbose:
         print(f"  {len(ml)} games. Home favourites: "
               f"{(ml['home_win_prob_market'] > 0.5).mean():.0%}. "
