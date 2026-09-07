@@ -575,12 +575,6 @@ def main(game_date: str = None):
         print(f"  PA table unavailable ({type(e).__name__}: {e}) -- "
               f"using historical PA histograms instead.")
 
-    workload = fit_workload(starters, game_date) if USE_REAL_PITCHER_DATA else None
-    exposure = {}
-    if workload is not None:
-        for pid in starters["pid"].dropna().astype(int).unique():
-            exposure[int(pid)] = starter_exposure_by_slot(*workload.bf_pmf(int(pid)))
-
     # ---- 5. Tonight's feature row per hitter -------------------------
     # `latest` holds one synthetic row per slate hitter (see step 4)
     # carrying his current shrunk rolling rates; overwrite the context
@@ -617,6 +611,21 @@ def main(game_date: str = None):
             names=dict(zip(starters["pid"].astype(int), starters["pname"])),
             as_of=game_date,
         ).set_index("pitcher")
+
+    # Fitted AFTER build_pitcher_rates, not before it -- and the order is
+    # the whole bug. load_starter_history is cache-only by design; the call
+    # above is what fetches a starter's Statcast and CREATES his cache.
+    # Fitted first, a pitcher on his first slate had no file yet, got zero
+    # starts and the league-mean prior, and then his full history was
+    # written a minute later, too late to be read. Every night after that
+    # he was fine, which is why it looked like debuts rather than a bug.
+    # 2026-09-07: Joe Ryan (132 career starts), Nick Pivetta, Brayan Bello
+    # all at 0 for exactly this reason.
+    workload = fit_workload(starters, game_date) if USE_REAL_PITCHER_DATA else None
+    exposure = {}
+    if workload is not None:
+        for pid in starters["pid"].dropna().astype(int).unique():
+            exposure[int(pid)] = starter_exposure_by_slot(*workload.bf_pmf(int(pid)))
 
     rows, matched_bullpen, shares = [], 0, []
     for hitter in hitters.itertuples():
