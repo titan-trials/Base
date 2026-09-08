@@ -351,6 +351,23 @@ def pct(v) -> str:
     return "—" if pd.isna(v) else f"{v * 100:.1f}%"
 
 
+def _int_or(value, default: int = 0) -> int:
+    """
+    int(), but NaN-safe -- which `int(x or 0)` is NOT.
+
+    NaN is truthy in Python, so `float("nan") or 0` evaluates to NaN and
+    int() then raises. That guard reads like it handles missing values and
+    handles only None and zero.
+
+    It matters because a slate file legitimately mixes rows: re-running
+    the predictor preserves rows for games already underway, so a column
+    added today is present on the refreshed rows and absent on the
+    preserved ones. On 2026-09-08, 10 of 30 pitcher rows had no
+    career_starts and the Pitchers tab died on the first of them.
+    """
+    return int(value) if pd.notna(value) else default
+
+
 def band_of(value, cuts) -> int:
     """Which quartile of the slate this value falls into, 1-4."""
     if pd.isna(value):
@@ -846,7 +863,7 @@ with tab_pitch:
         # position is how the wrong column ends up under the wrong header.
         rows = ""
         for r in pit.to_dict("records"):
-            starts = int(r.get("starts_seen") or 0)
+            starts = _int_or(r.get("starts_seen"))
             # At or under ten starts the expected batters faced is still
             # mostly the shrinkage prior rather than a read on him -- the
             # K prior is 250 batters faced, which is roughly ten starts
@@ -857,7 +874,7 @@ with tab_pitch:
             # a debut, and a veteran back from a long layoff. Burnes on
             # 2026-09-08 had 107 career starts and none for 464 days.
             # Same number, opposite meaning, so they get different marks.
-            career = int(r.get("career_starts") or 0)
+            career = _int_or(r.get("career_starts"))
             out_days = r.get("days_since_last_start")
             returning = starts == 0 and career >= 10
             rows += (
@@ -1140,7 +1157,7 @@ def _render_market_block():
                 f'color:{"var(--warn)" if light else "var(--ink3)"}">'
                 f'{starts if starts is not None else "—"}</td>'
                 f'<td style="color:var(--ink3);text-align:center">'
-                f'{int(r.get("n_books", 0) or 0)}</td></tr>')
+                f'{_int_or(r.get("n_books"))}</td></tr>')
 
         html('<table class="plain"><thead><tr><th>Pitcher</th><th>Matchup</th>'
              '<th style="text-align:center">Line</th>'
