@@ -269,6 +269,28 @@ def report(game_date: str, top_n: int = 5):
         print("  That question is the fastest way to learn what is missing.")
 
     path = cache_path(f"market_compare_{game_date}")
+    # Merged, not replaced -- for the same reason the odds capture is.
+    #
+    # This run only covers pitchers whose games had not started when the
+    # odds were taken; everyone earlier was excluded above as in-play. A
+    # plain overwrite would therefore DELETE the perfectly good comparison
+    # made for them this morning, and the dashboard's market table would
+    # empty out over the course of a day exactly as more games finished.
+    # Keyed on pitcher and line because a pitcher can be quoted at two.
+    if os.path.exists(path):
+        try:
+            previous = pd.read_csv(path)
+            keys = ["player", "line"]
+            if set(keys).issubset(previous.columns) and set(keys).issubset(out.columns):
+                combined = pd.concat([previous, out], ignore_index=True)
+                combined = combined.drop_duplicates(subset=keys, keep="last")
+                kept = len(combined) - len(out)
+                if kept > 0:
+                    print(f"\n  Kept {kept} earlier comparison(s) for games "
+                          f"already underway; {len(out)} refreshed.")
+                out = combined
+        except Exception as exc:
+            print(f"\n  (could not merge the earlier comparison: {exc})")
     out.to_csv(path, index=False)
     print(f"\n  Saved to cache/market_compare_{game_date}.csv")
     print("\n  This is the PRE-GAME view. Whose numbers were actually")

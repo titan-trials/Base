@@ -422,6 +422,17 @@ cuts = {k: [float(df[k].quantile(q)) for q in (.25, .50, .75)] for k in props}
 MAX_PICKS = 8
 PICKS_PARAM = "picks"
 
+# Starts-in-window thresholds for the two pitcher views.
+#
+# They differ on purpose. The Pitchers table is a reading aid: at or under
+# ten starts the shrinkage prior is still doing most of the work (the K
+# prior is 250 batters faced, about ten starts), so the number is flagged.
+# The market table is a decision aid, and there the bar is higher -- a
+# disagreement with five books means nothing if the model has only a
+# partial read on the pitcher, so anything under twenty is called out.
+THIN_STARTS = 10
+THIN_STARTS_MARKET = 20
+
 if "sp_picks" not in st.session_state:
     raw = st.query_params.get(PICKS_PARAM, "")
     # Truncated here rather than trusting the table to do it. A hand-edited
@@ -836,12 +847,30 @@ with tab_pitch:
         rows = ""
         for r in pit.to_dict("records"):
             starts = int(r.get("starts_seen") or 0)
-            # Under five starts the expected batters faced is mostly the
-            # league mean rather than a read on him, and saying so is
-            # cheaper than having someone discover it the hard way.
-            thin = starts < 5
+            # At or under ten starts the expected batters faced is still
+            # mostly the shrinkage prior rather than a read on him -- the
+            # K prior is 250 batters faced, which is roughly ten starts
+            # before a pitcher's own rate leads. Saying so is cheaper than
+            # having someone discover it the hard way.
+            thin = starts <= THIN_STARTS
+            # Two very different pitchers show zero starts in the window:
+            # a debut, and a veteran back from a long layoff. Burnes on
+            # 2026-09-08 had 107 career starts and none for 464 days.
+            # Same number, opposite meaning, so they get different marks.
+            career = int(r.get("career_starts") or 0)
+            out_days = r.get("days_since_last_start")
+            returning = starts == 0 and career >= 10
             rows += (
-                f'<tr><td style="font-weight:560">{r["pitcher"]}</td>'
+                f'<tr><td style="font-weight:560">{r["pitcher"]}'
+                + (f'<span class="sp-form cold" title="'
+                   f'{career} career starts but none in the last 12 months'
+                   f'{f" -- {int(out_days)} days since his last" if pd.notna(out_days) else ""}. '
+                   f'His batters faced and strikeout rate are the '
+                   f'new-pitcher prior, not a read on him. A pitcher back '
+                   f'from a long absence is usually on a shorter leash '
+                   f'than that prior assumes.">BACK</span>'
+                   if returning else '')
+                + f'</td>'
                 f'<td style="color:var(--ink2)">{r["team"]}</td>'
                 f'<td style="color:var(--ink2)">vs {r["opponent"]}</td>'
                 f'<td style="color:{"var(--warn)" if thin else "var(--ink2)"};'
@@ -860,10 +889,18 @@ with tab_pitch:
              '<th style="text-align:center">Over 5.5 K</th>'
              '<th style="text-align:center">Over 6.5 K</th>'
              '</tr></thead><tbody>' + rows + '</tbody></table>')
-        thin_n = int((pit["starts_seen"] < 5).sum()) if "starts_seen" in pit else 0
-        note = (f' · {thin_n} marked * have under five starts of history, so '
-                f'their batters faced is close to the league average'
+        thin_n = int((pit["starts_seen"] <= THIN_STARTS).sum()) \
+            if "starts_seen" in pit else 0
+        back_n = int(((pit.get("starts_seen", 0) == 0)
+                      & (pit.get("career_starts", 0) >= 10)).sum()) \
+            if "career_starts" in pit else 0
+        note = (f' · {thin_n} marked * have {THIN_STARTS} or fewer starts in '
+                f'the last 12 months, so their batters faced leans on the '
+                f'prior rather than on them'
                 if thin_n else '')
+        if back_n:
+            note += (f' · {back_n} marked BACK have a real career but no '
+                     f'start in a year — hover for how long')
         html(f'<div style="margin-top:10px;font-size:12px;color:var(--ink3);'
              f'line-height:1.55">Colour is which quarter of tonight\'s '
              f'starters he falls into{note}. Batters faced is what drives '
@@ -1072,8 +1109,22 @@ def _render_market_block():
                 colour, label = "var(--b1ink)", f"UNDER by {abs(edge):.1%}"
             else:
                 colour, label = "var(--ink2)", "agree"
+            # How much history is behind the model's side of the
+            # disagreement. Under twenty starts the model is partly
+            # quoting a prior, and a prior disagreeing with five books is
+            # not an edge -- it is the model admitting it does not know.
+            # The name carries the warning because the name is what gets
+            # read; the two columns say how thin, and how many strikeouts
+            # the model is actually projecting behind the percentage.
+            seen = r.get("starts_seen")
+            starts = int(seen) if pd.notna(seen) else None
+            light = starts is not None and starts < THIN_STARTS_MARKET
+            exp_k = r.get("expected_k")
             rows += (
-                f'<tr><td style="font-weight:560">{r.get("pitcher", r.get("player"))}</td>'
+                f'<tr><td style="font-weight:560;'
+                f'color:{"var(--warn)" if light else "var(--ink)"}">'
+                f'{r.get("pitcher", r.get("player"))}'
+                f'{"*" if light else ""}</td>'
                 f'<td style="color:var(--ink2)">{r.get("team","")} '
                 f'<span style="color:var(--ink3)">vs {r.get("opponent","")}</span></td>'
                 f'<td style="color:var(--ink);text-align:center;'
@@ -1082,6 +1133,12 @@ def _render_market_block():
                 f'<td style="text-align:center">{pct(r.get("market_prob"))}</td>'
                 f'<td style="color:{colour};text-align:center;font-weight:560">'
                 f'{label}</td>'
+                f'<td style="color:var(--ink2);text-align:center;'
+                f'font-variant-numeric:tabular-nums">'
+                f'{f"{exp_k:.1f}" if pd.notna(exp_k) else "—"}</td>'
+                f'<td style="text-align:center;font-variant-numeric:tabular-nums;'
+                f'color:{"var(--warn)" if light else "var(--ink3)"}">'
+                f'{starts if starts is not None else "—"}</td>'
                 f'<td style="color:var(--ink3);text-align:center">'
                 f'{int(r.get("n_books", 0) or 0)}</td></tr>')
 
@@ -1090,6 +1147,8 @@ def _render_market_block():
              '<th style="text-align:center">Model</th>'
              '<th style="text-align:center">Market</th>'
              '<th style="text-align:center">Disagreement</th>'
+             '<th style="text-align:center">Exp K</th>'
+             '<th style="text-align:center">Starts</th>'
              '<th style="text-align:center">Books</th>'
              '</tr></thead><tbody>' + rows + '</tbody></table>')
 
@@ -1117,7 +1176,14 @@ def _render_market_block():
              f'Agreeing with the market is not an edge; it means the model '
              f'is reproducing public information competently. An edge is '
              f'disagreement that turns out to be right, which only '
-             f'<code>score_slate.py</code> can tell you.</div>')
+             f'<code>score_slate.py</code> can tell you.<br>'
+             f'<b style="color:var(--warn)">Amber names</b> have fewer than '
+             f'{THIN_STARTS_MARKET} starts in the last 12 months. Their '
+             f'model number is partly the shrinkage prior, so a big gap '
+             f'there is the model saying it does not know this pitcher, '
+             f'not that it has found something the books missed. '
+             f'<b style="color:var(--ink2)">Exp K</b> is the strikeout '
+             f'total behind the percentage.</div>')
 
 
 # Re-entering a tab context appends to it. The market block has to be

@@ -340,6 +340,23 @@ class WorkloadModel:
                     n.to_dict(), k_per_bf, k_rates.to_dict(),
                     new_pitcher_mean=new_pitcher_mean)
         model.new_pitcher_k = float(thin_k)
+        # Career context, kept so a zero can be told apart from a zero.
+        #
+        # starts_seen is the TRAILING WINDOW count, and it is 0 for two
+        # completely different pitchers: a genuine debut, and a veteran
+        # back from a long absence. Corbin Burnes on 2026-09-08 had 108
+        # career starts and none since 2025-06-01 -- fifteen months out.
+        # The model is right to refuse to project him on pre-injury form,
+        # but "0 starts" reads as "nobody" when it means "nobody LATELY",
+        # and the two want different priors: a pitcher returning from a
+        # long layoff is on a leash, which a debutant is not.
+        #
+        # Not used by the model. Carried so the dashboard can say which
+        # kind of zero this is, the same way the form marker is measured
+        # and shown without feeding anything.
+        model.career_start_counts = career_starts.to_dict()
+        model.last_start_dates = (career.groupby("pitcher")["game_date"]
+                                  .max().to_dict())
         return model
 
     def expected_bf(self, pitcher_id) -> float:
@@ -353,6 +370,17 @@ class WorkloadModel:
 
     def starts_seen(self, pitcher_id) -> int:
         return int(self.pitcher_starts.get(pitcher_id, 0))
+
+    def career_starts(self, pitcher_id) -> int:
+        """Every non-opener start in the cache before tonight."""
+        return int(getattr(self, "career_start_counts", {}).get(pitcher_id, 0))
+
+    def days_since_last_start(self, pitcher_id, as_of) -> float:
+        """NaN when he has never started; else days since his last one."""
+        last = getattr(self, "last_start_dates", {}).get(pitcher_id)
+        if last is None or pd.isna(last):
+            return float("nan")
+        return float((pd.Timestamp(as_of) - pd.Timestamp(last)).days)
 
     def bf_pmf(self, pitcher_id) -> tuple:
         """(support, probabilities) for how many batters he faces tonight."""

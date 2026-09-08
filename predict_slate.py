@@ -242,6 +242,12 @@ def build_pitcher_props(frame, starters, game_date, workload, pa):
             "opponent": lineup["team"].iloc[0],
             "expected_bf": workload.expected_bf(pid),
             "starts_seen": workload.starts_seen(pid),
+            # Not model inputs -- markers. See WorkloadModel.fit: they are
+            # what tells a debut apart from a veteran back off a layoff,
+            # both of whom show starts_seen = 0.
+            "career_starts": workload.career_starts(pid),
+            "days_since_last_start": workload.days_since_last_start(
+                pid, game_date),
             "k_rate": workload.k_rate(pid),
             "expected_k": expected,
             "lineup_faced": len(lineup),
