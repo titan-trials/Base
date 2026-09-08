@@ -496,8 +496,30 @@ def score_teams(game_date: str):
     # Market, if captured.
     market = None
     gl_path = cache_path(f"gamelines_{game_date}")
+    gl = None
     if os.path.exists(gl_path):
         gl = pd.read_csv(gl_path)
+        # Drop any price taken after its own game started.
+        #
+        # data/odds_lines now discards these at the fetch, so a file
+        # captured after 2026-09-08 has none. Earlier ones do: 10 of 14 on
+        # 2026-09-06, which handed the "market" a Brier of 0.137 and made
+        # the model look twice as bad as it is. A live price is not a
+        # forecast, and grading against one is not a benchmark.
+        if {"commence_time", "fetched_at_utc"}.issubset(gl.columns):
+            live = (pd.to_datetime(gl["commence_time"], utc=True,
+                                   errors="coerce")
+                    <= pd.to_datetime(gl["fetched_at_utc"], utc=True,
+                                      errors="coerce"))
+            if live.any():
+                print(f"    Ignoring {int(live.sum())} in-play price(s) in "
+                      f"gamelines_{game_date}.csv; {int((~live).sum())} "
+                      f"pre-game price(s) remain.")
+                gl = gl[~live]
+        if gl.empty:
+            print("    No pre-game market prices for this slate.")
+            gl = None
+    if gl is not None and not gl.empty:
         gl["home_team"] = gl["home_team"].map(TEAM_ABBREV).fillna(gl["home_team"])
         gl["away_team"] = gl["away_team"].map(TEAM_ABBREV).fillna(gl["away_team"])
         m = basis.merge(gl[["home_team", "away_team", "home_win_prob_market",

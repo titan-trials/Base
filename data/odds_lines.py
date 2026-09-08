@@ -456,10 +456,29 @@ def fetch_game_lines(game_date: str, regions: str = DEFAULT_REGIONS,
         return pd.DataFrame()
 
     target = pd.Timestamp(game_date).date()
-    rows = []
+    now = pd.Timestamp.utcnow()
+    rows, in_play = [], 0
     for event in payload:
         start = pd.to_datetime(event.get("commence_time"), utc=True)
         if start.tz_convert("America/New_York").date() != target:
+            continue
+        # Same pre-game rule the props path enforces, applied here too.
+        #
+        # It could not be applied the same WAY: this endpoint is one call
+        # for the whole slate, so a started game cannot be skipped to save
+        # a credit -- the two are already paid for. But its price still has
+        # to be thrown away, because the feed keeps returning a game after
+        # first pitch with LIVE odds attached, and a live moneyline is not
+        # a forecast. On 2026-09-07 that produced a 0.967 and a 0.029:
+        # teams four runs up and four runs down, priced as though somebody
+        # had predicted it.
+        #
+        # Left in, those rows overwrote the pre-game capture on merge and
+        # gave the market a Brier of 0.137 on 2026-09-06 -- better than any
+        # book has ever priced baseball, and only because the games were
+        # already decided. The model was then graded against that.
+        if start <= now:
+            in_play += 1
             continue
         home, away = event.get("home_team"), event.get("away_team")
         for book in event.get("bookmakers") or []:
@@ -517,6 +536,10 @@ def fetch_game_lines(game_date: str, regions: str = DEFAULT_REGIONS,
         ml = ml.merge(tot, on="event_id", how="left")
     ml["game_date"] = game_date
     ml["fetched_at_utc"] = pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    if in_play and verbose:
+        print(f"  Discarded {in_play} game(s) already underway -- those "
+              f"prices are live, not pre-game. Any earlier capture of them "
+              f"is kept below.")
     gl_path = cache_path(f"gamelines_{game_date}")
     ml = _merge_capture(ml, gl_path, ["event_id"], verbose)
     ml.to_csv(gl_path, index=False)
