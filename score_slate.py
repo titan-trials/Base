@@ -231,8 +231,65 @@ def score_frame(frame) -> list:
 
 FORM_LOG_KEY = "form_log"
 PITCHER_LOG_KEY = "pitcher_scoring_log"
+# One row per graded STARTER, alongside the two-row-per-slate summary.
+#
+# The summary answers "how is the K model doing" and cannot answer
+# anything else: two rows a night, aggregated, with no pitcher in them. So
+# "do pitchers the model barely knows run over their projection?" -- the
+# question raised by every amber row on the dashboard -- needed the whole
+# join rebuilt from the prediction files and the boxscore cache.
+#
+# This keeps the join. Roughly fifteen rows a night, each carrying how
+# much history stood behind the projection, so the thin, the returning and
+# the established can be compared without re-deriving anything.
+PITCHER_ROWS_KEY = "pitcher_row_log"
 K_LINES = (5.5, 6.5)
 K_MODEL_CHANGED = "2026-09-05"
+
+
+def _log_pitcher_rows(basis: pd.DataFrame, game_date: str):
+    """
+    One row per clean starter, appended to cache/pitcher_row_log.csv.
+
+    Only clean rows, for the same reason the summary uses only clean rows:
+    a prediction written after first pitch is not a forecast, and a file
+    meant for slicing must not need a caveat column to be read safely.
+
+    `starts_seen` and `career_starts` are the point. A zero in the first
+    with a hundred in the second is a pitcher back from a layoff; a zero in
+    both is a debut; the two get the same prior today and probably should
+    not. Written whether or not those columns exist yet, so a slate scored
+    before predict_slate started exporting them still contributes its
+    strikeout and batters-faced numbers.
+    """
+    keep = ["pitcher", "pitcher_id", "team", "opponent", "starts_seen",
+            "career_starts", "days_since_last_start", "expected_bf",
+            "expected_k", "k_rate", "batters_faced", "strikeouts",
+            "innings_pitched"] + [f"prob_k_over_{line}" for line in K_LINES]
+    rows = basis[[c for c in keep if c in basis.columns]].copy()
+    if rows.empty:
+        return
+    rows.insert(0, "game_date", game_date)
+    # Residuals, so the questions this file exists for are a filter rather
+    # than arithmetic: positive means the model projected MORE than
+    # happened.
+    if {"expected_k", "strikeouts"}.issubset(rows.columns):
+        rows["k_error"] = rows["expected_k"] - rows["strikeouts"]
+    if {"expected_bf", "batters_faced"}.issubset(rows.columns):
+        rows["bf_error"] = rows["expected_bf"] - rows["batters_faced"]
+
+    path = cache_path(PITCHER_ROWS_KEY)
+    if os.path.exists(path):
+        try:
+            previous = pd.read_csv(path)
+            previous = previous[previous["game_date"] != game_date]
+            rows = pd.concat([previous, rows], ignore_index=True)
+        except Exception as exc:
+            print(f"  (could not extend the pitcher row log: {exc})")
+    rows.to_csv(path, index=False)
+    print(f"  {len(rows[rows['game_date'] == game_date])} starter row(s) "
+          f"added to cache/{PITCHER_ROWS_KEY}.csv "
+          f"({len(rows)} total across {rows['game_date'].nunique()} slate).")
 
 
 def score_pitchers(game_date: str):
@@ -358,6 +415,8 @@ def score_pitchers(game_date: str):
     else:
         log = entry
     log.to_csv(log_path, index=False)
+
+    _log_pitcher_rows(basis, game_date)
 
     print("\n" + "-" * 72)
     print(f"RUNNING TOTAL across {log['game_date'].nunique()} slate(s)")
