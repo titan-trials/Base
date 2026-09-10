@@ -1,0 +1,11 @@
+market,player,line,prob_over,hold,n_books,commence_time,home_team,away_team,game_date,fetched_at_utc
+pitcher_strikeouts,Martin Perez,2.5,0.5893794380981784,0.06441223832528187,3,2026-09-10T16:15:00Z,Atlanta Braves,Tampa Bay Rays,2026-09-10,2026-09-10T14:47:27Z
+pitcher_strikeouts,Cristian Javier,3.5,0.5682441769808004,0.0674724394293853,6,2026-09-10T17:06:00Z,Philadelphia Phillies,Houston Astros,2026-09-10,2026-09-10T14:47:27Z
+pitcher_strikeouts,Nick Martinez,3.5,0.47343788231075684,0.06455423113266612,6,2026-09-10T16:15:00Z,Atlanta Braves,Tampa Bay Rays,2026-09-10,2026-09-10T14:47:27Z
+pitcher_strikeouts,Martin Perez,3.5,0.3830485023956545,0.06349206349206349,3,2026-09-10T16:15:00Z,Atlanta Braves,Tampa Bay Rays,2026-09-10,2026-09-10T14:47:27Z
+pitcher_strikeouts,Ryan Feltner,4.5,0.45941297867461595,0.06662230109435074,6,2026-09-10T23:05:00Z,New York Yankees,Colorado Rockies,2026-09-10,2026-09-10T14:47:27Z
+pitcher_strikeouts,Jared Jones,5.5,0.5704060427863338,0.0674724394293853,6,2026-09-10T23:41:00Z,Chicago White Sox,Pittsburgh Pirates,2026-09-10,2026-09-10T14:47:27Z
+pitcher_strikeouts,Max Fried,5.5,0.4804680258911181,0.06620925997619764,6,2026-09-10T23:05:00Z,New York Yankees,Colorado Rockies,2026-09-10,2026-09-10T14:47:27Z
+pitcher_strikeouts,Logan Gilbert,6.5,0.5474400439981407,0.066347526664987,6,2026-09-10T20:10:00Z,Seattle Mariners,Texas Rangers,2026-09-10,2026-09-10T14:47:27Z
+pitcher_strikeouts,Jacob deGrom,6.5,0.5348996302644773,0.06374517722975559,6,2026-09-10T20:10:00Z,Seattle Mariners,Texas Rangers,2026-09-10,2026-09-10T14:47:27Z
+pitcher_strikeouts,Zack Wheeler,6.5,0.5,0.0673423150058663,6,2026-09-10T17:06:00Z,Philadelphia Phillies,Houston Astros,2026-09-10,2026-09-10T14:47:27Z
