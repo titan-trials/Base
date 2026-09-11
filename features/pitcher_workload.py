@@ -539,11 +539,17 @@ class WorkloadModel:
         """
         Projected batters faced minus projected outs.
 
-        The coherence check between the two halves. It should land near
-        the league's baserunners per start (hits + walks + hit batsmen,
-        roughly 10-11). A number far from that means the two fits
-        disagree about the same pitcher's night, which is exactly the
-        failure mode that fitting them over one window is meant to avoid.
+        The coherence check between the two halves. Measured on 280 real
+        starts it is 6.85, against 6.53 actual baserunners (walks plus
+        hits) -- the 0.32 gap is double plays and runners thrown out,
+        where one batter yields two outs. So the band to expect is
+        roughly 6 to 7.5.
+
+        A pitcher far outside it means the two fits disagree about the
+        same night, which is the failure mode that fitting both over one
+        window is meant to avoid. (An earlier version of this note said
+        10-11, which is simply wrong and would have made a passing check
+        look broken.)
         """
         if not _outs_ok(self):
             return float("nan")

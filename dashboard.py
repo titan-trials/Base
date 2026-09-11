@@ -836,130 +836,175 @@ with tab_pitch:
             pit = None
 
     if pit is not None and not pit.empty and "prob_k_over_5.5" in pit.columns:
-        pit = pit.sort_values("expected_k", ascending=False)
-        # k_cuts, NOT cuts. This is a flat script: Streamlit runs it top to
-        # bottom every rerun, so every `with tab_x:` block shares one
-        # namespace. Naming this `cuts` overwrote the hitter quartiles
-        # defined near the top, and the All hitters tab -- which runs after
-        # this one and reads them -- died with KeyError: 'prob_hr'.
+        # Sortable, like All hitters, rather than hand-built HTML.
         #
-        # The tab that broke was not the tab with the bug, which is what
-        # makes this shape of error expensive to chase. Anything defined
-        # inside a tab block gets a name that could only belong to it.
-        k_cuts = {c: [float(pit[c].quantile(q)) for q in (.25, .50, .75)]
-                  for c in ("prob_k_over_5.5", "prob_k_over_6.5")}
+        # There are thirteen numbers a row now and the interesting reads
+        # are comparisons: who goes deepest, who misses the most bats per
+        # batter faced, which thin starter the model is least sure about.
+        # A fixed sort by expected strikeouts answers one of those and
+        # hides the rest.
+        #
+        # Two things that were crammed inside cells become columns,
+        # because a column can be sorted and a suffix cannot:
+        #   - innings, which was "(5.3 ip)" inside the Outs cell
+        #   - days since his last start, which was a BACK chip and a
+        #     tooltip. As a number it is better than a chip: normal rest
+        #     is 4-6 days, so a 464 sorts straight to the top and a
+        #     6-day and a 40-day layoff are no longer the same thing.
+        #
+        # Names are prefixed `pit_` throughout. This is a flat script and
+        # every tab shares one namespace -- naming a local `cuts` here
+        # once clobbered the hitter quartiles and killed a tab that runs
+        # later. The tab that broke was not the tab with the bug.
+        pit = pit.sort_values("expected_k", ascending=False)
 
-        o_cols = [c for c in ("prob_outs_over_14.5", "prob_outs_over_17.5")
-                  if c in pit.columns and pit[c].notna().any()]
-        o_cuts = {c: [float(pit[c].quantile(q)) for q in (.25, .50, .75)]
-                  for c in o_cols}
+        pit_view = pd.DataFrame({
+            "Pitcher": pit["pitcher"],
+            "Team": pit["team"],
+            "Opp": pit["opponent"],
+            "Starts": pd.to_numeric(pit.get("starts_seen"), errors="coerce"),
+            "Rest": pd.to_numeric(pit.get("days_since_last_start"),
+                                  errors="coerce"),
+            "BF": pd.to_numeric(pit["expected_bf"], errors="coerce"),
+            "K": pd.to_numeric(pit["expected_k"], errors="coerce"),
+        })
+        PIT_PROPS = {}
+        for col, label in (("prob_k_over_5.5", "5.5 K"),
+                           ("prob_k_over_6.5", "6.5 K")):
+            if col in pit.columns:
+                pit_view[label] = pd.to_numeric(pit[col], errors="coerce")
+                PIT_PROPS[label] = col
+        if "expected_outs" in pit.columns:
+            outs = pd.to_numeric(pit["expected_outs"], errors="coerce")
+            pit_view["Outs"] = outs
+            pit_view["IP"] = outs / 3.0
+        for col, label in (("prob_outs_over_14.5", "14.5 outs"),
+                           ("prob_outs_over_17.5", "17.5 outs")):
+            if col in pit.columns and pit[col].notna().any():
+                pit_view[label] = pd.to_numeric(pit[col], errors="coerce")
+                PIT_PROPS[label] = col
 
-        def ocell(value, col):
-            if col not in o_cuts or pd.isna(value):
-                return '<td style="color:var(--ink3);text-align:center">—</td>'
-            band = band_of(value, o_cuts[col])
-            if band == 0:
-                return '<td style="color:var(--ink3)">—</td>'
-            bg, ink = BANDS[band]
-            return (f'<td style="background:{bg};color:{ink};font-weight:560;'
-                    f'text-align:center;border-radius:6px">{pct(value)}</td>')
+        # Quartiles measured on the whole slate, so the colour means the
+        # same thing after the user sorts as it did before.
+        pit_cuts = {lab: [float(pit_view[lab].quantile(q))
+                          for q in (.25, .50, .75)]
+                    for lab in PIT_PROPS}
 
-        def kcell(value, col):
-            band = band_of(value, k_cuts[col])
-            if band == 0:
-                return '<td style="color:var(--ink3)">—</td>'
-            bg, ink = BANDS[band]
-            return (f'<td style="background:{bg};color:{ink};font-weight:560;'
-                    f'text-align:center;border-radius:6px">{pct(value)}</td>')
+        def pit_band_fill(series, column_cuts):
+            out = []
+            for value in series:
+                band = 0 if pd.isna(value) else band_of(value, column_cuts)
+                if band == 0:
+                    out.append("")
+                else:
+                    bg, ink = BANDS[band]
+                    out.append(f"background-color:{bg};color:{ink}")
+            return out
 
-        # Plain dicts, not itertuples: `prob_k_over_5.5` has a dot in it,
-        # and itertuples silently renames any column that is not a valid
-        # identifier to positional `_7`, `_8`. Reaching for those by
-        # position is how the wrong column ends up under the wrong header.
-        rows = ""
-        for r in pit.to_dict("records"):
-            starts = _int_or(r.get("starts_seen"))
-            # At or under ten starts the expected batters faced is still
-            # mostly the shrinkage prior rather than a read on him -- the
-            # K prior is 250 batters faced, which is roughly ten starts
-            # before a pitcher's own rate leads. Saying so is cheaper than
-            # having someone discover it the hard way.
-            thin = starts <= THIN_STARTS
-            # Two very different pitchers show zero starts in the window:
-            # a debut, and a veteran back from a long layoff. Burnes on
-            # 2026-09-08 had 107 career starts and none for 464 days.
-            # Same number, opposite meaning, so they get different marks.
-            career = _int_or(r.get("career_starts"))
-            out_days = r.get("days_since_last_start")
-            returning = starts == 0 and career >= 10
-            rows += (
-                f'<tr><td style="font-weight:560">{r["pitcher"]}'
-                + (f'<span class="sp-form cold" title="'
-                   f'{career} career starts but none in the last 12 months'
-                   f'{f" -- {int(out_days)} days since his last" if pd.notna(out_days) else ""}. '
-                   f'His batters faced and strikeout rate are the '
-                   f'new-pitcher prior, not a read on him. A pitcher back '
-                   f'from a long absence is usually on a shorter leash '
-                   f'than that prior assumes.">BACK</span>'
-                   if returning else '')
-                + f'</td>'
-                f'<td style="color:var(--ink2)">{r["team"]}</td>'
-                f'<td style="color:var(--ink2)">vs {r["opponent"]}</td>'
-                f'<td style="color:{"var(--warn)" if thin else "var(--ink2)"};'
-                f'text-align:center">{starts}{"*" if thin else ""}</td>'
-                f'<td style="color:var(--ink2);text-align:center">'
-                f'{r["expected_bf"]:.1f}</td>'
-                f'<td style="color:var(--ink);text-align:center;'
-                f'font-weight:560">{r["expected_k"]:.1f}</td>'
-                + kcell(r.get("prob_k_over_5.5"), "prob_k_over_5.5")
-                + kcell(r.get("prob_k_over_6.5"), "prob_k_over_6.5")
-                # Outs, shown as innings because that is how anyone
-                # actually thinks about a starter's night. 17.5 outs is
-                # "gets through six", which is the decision a manager is
-                # making -- and batters faced, which drives the strikeout
-                # number to its left, is the consequence of it.
-                + (f'<td style="color:var(--ink2);text-align:center;'
-                   f'font-variant-numeric:tabular-nums">'
-                   f'{r["expected_outs"]:.1f}'
-                   f'<span style="color:var(--ink3);font-size:11px"> '
-                   f'({r["expected_outs"] / 3:.1f} ip)</span></td>'
-                   if pd.notna(r.get("expected_outs")) else
-                   '<td style="color:var(--ink3);text-align:center">—</td>')
-                + ocell(r.get("prob_outs_over_14.5"), "prob_outs_over_14.5")
-                + ocell(r.get("prob_outs_over_17.5"), "prob_outs_over_17.5")
-                + '</tr>')
-        html('<table class="plain"><thead><tr><th>Pitcher</th><th>Team</th>'
-             '<th>Opponent</th><th style="text-align:center">Starts</th>'
-             '<th style="text-align:center">Batters faced</th>'
-             '<th style="text-align:center">Expected K</th>'
-             '<th style="text-align:center">Over 5.5 K</th>'
-             '<th style="text-align:center">Over 6.5 K</th>'
-             '<th style="text-align:center">Outs</th>'
-             '<th style="text-align:center">Over 14.5</th>'
-             '<th style="text-align:center">Over 17.5</th>'
-             '</tr></thead><tbody>' + rows + '</tbody></table>')
+        def pit_thin_fill(series):
+            # Same threshold the footnote explains, applied to the number
+            # itself so it survives sorting.
+            return [f"color:{_css_var('warn')}"
+                    if pd.notna(v) and v <= THIN_STARTS else ""
+                    for v in series]
+
+        def pit_rest_fill(series):
+            # A starter works on four to six days' rest. Past a month he
+            # is coming back from something, and the model has no idea
+            # what -- that is the Burnes case, 464 days.
+            return [f"color:{_css_var('warn')}"
+                    if pd.notna(v) and v > 30 else "" for v in series]
+
+        pit_styled = pit_view.style
+        for lab in PIT_PROPS:
+            pit_styled = pit_styled.apply(pit_band_fill,
+                                          column_cuts=pit_cuts[lab],
+                                          subset=[lab])
+        if "Starts" in pit_view:
+            pit_styled = pit_styled.apply(pit_thin_fill, subset=["Starts"])
+        if "Rest" in pit_view:
+            pit_styled = pit_styled.apply(pit_rest_fill, subset=["Rest"])
+        pit_fmt = {lab: "{:.1%}" for lab in PIT_PROPS}
+        pit_fmt.update({"BF": "{:.1f}", "K": "{:.1f}", "Starts": "{:.0f}",
+                        "Rest": "{:.0f}"})
+        if "Outs" in pit_view:
+            pit_fmt.update({"Outs": "{:.1f}", "IP": "{:.1f}"})
+        pit_styled = pit_styled.format(pit_fmt, na_rep="—")
+
+        pit_config = {
+            "Pitcher": st.column_config.Column(pinned=True, width=150),
+            "Team": st.column_config.Column(width=58),
+            "Opp": st.column_config.Column(width=58,
+                                           help="The lineup he faces tonight"),
+            "Starts": st.column_config.Column(
+                width=62,
+                help=f"Starts in the last 12 months. At or under "
+                     f"{THIN_STARTS} (amber) his batters faced and "
+                     f"strikeout rate lean on the league prior rather "
+                     f"than on him, so read those as 'a starter in this "
+                     f"spot', not as a read on the man."),
+            "Rest": st.column_config.Column(
+                width=58,
+                help="Days since his last start. Four to six is a normal "
+                     "turn in the rotation. Amber past 30 means he is "
+                     "coming back from something the model cannot see — "
+                     "and a pitcher on a rehab leash goes shorter than "
+                     "any prior expects."),
+            "BF": st.column_config.Column(
+                width=58,
+                help="Batters he is projected to face. Everything to the "
+                     "right is built on this — a starter pulled in the "
+                     "fourth cannot reach six strikeouts however good "
+                     "his rate is."),
+            "K": st.column_config.Column(
+                width=58,
+                help="Strikeouts projected, by walking the real batting "
+                     "order: batter n is lineup slot n mod 9, so the "
+                     "leadoff hitter is faced three times and the "
+                     "nine-hitter twice, each at his own strikeout rate."),
+            "Outs": st.column_config.Column(
+                width=62,
+                help="Outs recorded, fitted separately from batters faced "
+                     "and graded against real innings pitched."),
+            "IP": st.column_config.Column(
+                width=52, help="The same number in innings — outs / 3."),
+        }
+        for lab, col in PIT_PROPS.items():
+            pit_config[lab] = st.column_config.Column(
+                width=76,
+                help=("Chance he records more than "
+                      f"{lab.split()[0]} "
+                      + ("strikeouts" if lab.endswith("K") else
+                         f"outs ({float(lab.split()[0]) / 3:.1f} innings)")))
+
+        st.dataframe(pit_styled, width="stretch", hide_index=True,
+                     height=min(560, 40 + 35 * len(pit_view)),
+                     column_config=pit_config)
+
         thin_n = int((pit["starts_seen"] <= THIN_STARTS).sum()) \
             if "starts_seen" in pit else 0
         back_n = int(((pit.get("starts_seen", 0) == 0)
                       & (pit.get("career_starts", 0) >= 10)).sum()) \
             if "career_starts" in pit else 0
-        note = (f' · {thin_n} marked * have {THIN_STARTS} or fewer starts in '
-                f'the last 12 months, so their batters faced leans on the '
-                f'prior rather than on them'
+        note = (f' · {thin_n} sit at {THIN_STARTS} starts or fewer (amber), '
+                f'so their numbers lean on the prior rather than on them'
                 if thin_n else '')
         if back_n:
-            note += (f' · {back_n} marked BACK have a real career but no '
-                     f'start in a year — hover for how long')
+            note += (f' · {back_n} have a real career but no start in a '
+                     f'year — sort by Rest to find them')
         html(f'<div style="margin-top:10px;font-size:12px;color:var(--ink3);'
-             f'line-height:1.55">Colour is which quarter of tonight\'s '
-             f'starters he falls into{note}. Batters faced is what drives '
-             f'everything else — a pitcher pulled in the fourth cannot '
-             f'reach six strikeouts however good his rate is.<br>'
-             f'<b style="color:var(--ink2)">Outs</b> is that same idea '
-             f'stated directly: 14.5 is getting through five innings, 17.5 '
-             f'through six. Model only — the outs market is charged per '
-             f'game and would double the odds bill, so these are graded '
-             f'against real innings pitched rather than against a price.'
+             f'line-height:1.55">Click any header to sort{note}. Colour is '
+             f'which quarter of tonight\'s starters he falls into, measured '
+             f'on the whole slate so it keeps its meaning after you sort.'
+             f'<br><b style="color:var(--ink2)">Outs</b> is how deep he '
+             f'goes: 14.5 is getting through five innings, 17.5 through '
+             f'six. Model only — the outs market is charged per game and '
+             f'would double the odds bill, so these are graded against '
+             f'real innings pitched rather than against a price.<br>'
+             f'Sorting by <b style="color:var(--ink2)">Outs</b> against '
+             f'<b style="color:var(--ink2)">K</b> is the useful one: they '
+             f'do not agree, and a pitcher high in one and low in the '
+             f'other is telling you something a single column cannot.'
              f'</div>')
 
     elif "opposing_pitcher" not in df.columns:
