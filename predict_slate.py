@@ -113,6 +113,10 @@ SHAPE_METHOD = "frequency"   # chosen by select_tilt_method on the backtest
 
 
 K_LINES = (5.5, 6.5)
+# Outs recorded, at the lines books actually post. 14.5 is "gets through
+# five", 17.5 is "gets through six" -- the two decisions a manager is
+# really making, which is why the market clusters there.
+OUTS_LINES = (14.5, 15.5, 16.5, 17.5, 18.5)
 
 
 def fit_workload(starters, game_date, verbose=True):
@@ -250,10 +254,29 @@ def build_pitcher_props(frame, starters, game_date, workload, pa):
                 pid, game_date),
             "k_rate": workload.k_rate(pid),
             "expected_k": expected,
+            # Outs recorded. Fitted in the same window as batters faced
+            # and shrunk the same way; see WorkloadModel.fit. Model only
+            # -- the pitcher_outs market is charged per event and would
+            # roughly double the odds bill, so this one is graded against
+            # real innings pitched rather than against a price.
+            "expected_outs": workload.expected_outs(pid),
+            "implied_baserunners": workload.implied_baserunners(pid),
             "lineup_faced": len(lineup),
         }
         for line in K_LINES:
             row[f"prob_k_over_{line}"] = prob_over(dist, line)
+
+        # Outs over the usual book lines, plus the whole distribution for
+        # the same reason k_dist is stored: the lines posted vary by
+        # pitcher, and a stored pmf answers all of them.
+        o_support, o_pmf = workload.outs_pmf(pid)
+        if o_support is not None:
+            for line in OUTS_LINES:
+                row[f"prob_outs_over_{line}"] = float(
+                    o_pmf[o_support > line].sum())
+            row["outs_dist"] = ",".join(
+                f"{int(o):d}:{p:.6f}" for o, p in zip(o_support, o_pmf)
+                if p > 1e-6)
         # The whole distribution, not just the two lines above.
         #
         # Sportsbooks set a line per pitcher, and they are all over the

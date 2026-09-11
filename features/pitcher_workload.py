@@ -146,6 +146,86 @@ DISPERSION_POINTS = 5
 
 MAX_BF = 40
 
+# Outs recorded per start: the same prior strength as batters faced,
+# because it is the same kind of quantity measured in the same units
+# (one number per start) and there is no reason to believe a pitcher's
+# outs stabilise at a different rate than his batters faced.
+OUTS_PRIOR_STARTS = BF_PRIOR_STARTS
+MAX_OUTS = 27
+
+# How many outs a plate appearance records, used for AT MOST ONE plate
+# appearance per start -- see _outs_by_start.
+#
+# Deliberately not the primary method. Measured against real data the map
+# is wrong in a way no map can fix: `single` comes out at 0.018 outs and
+# `strikeout` at 0.989, because runners get thrown out BETWEEN plate
+# appearances and the batter's event knows nothing about it. Applied to
+# all 25 plate appearances of a start that drift compounds; applied to
+# the last one only, it is bounded.
+OUT_EVENTS = {
+    "field_out": 1, "strikeout": 1, "force_out": 1, "sac_fly": 1,
+    "sac_bunt": 1, "fielders_choice_out": 1, "other_out": 1,
+    "grounded_into_double_play": 2, "double_play": 2,
+    "strikeout_double_play": 2, "sac_fly_double_play": 2,
+    "sac_bunt_double_play": 2, "triple_play": 3,
+}
+
+
+def _outs_by_start(work: pd.DataFrame) -> pd.Series:
+    """
+    Outs recorded per (pitcher, game), from the half-inning structure.
+
+    THE METHOD, AND WHY NOT THE OBVIOUS ONE
+    ---------------------------------------
+    The obvious way is to map each event to the outs it records and sum.
+    That is wrong, and measurably so: over one pitcher's 2,000 plate
+    appearances the implied outs for `single` came out at 0.018 and for
+    `strikeout` at 0.989, because runners are thrown out BETWEEN plate
+    appearances -- caught stealing, out advancing, picked off -- and the
+    batter's event cannot see it. A few percent per plate appearance is
+    half an out per start.
+
+    A completed half-inning does not have that problem. It is worth
+    exactly `3 - outs when he entered it`, whatever happened on the bases,
+    because the inning ends at three outs by definition. And a starter who
+    appears in inning n+1 must have completed inning n.
+
+    So every half-inning but his last is exact, and the event map is used
+    only for the final plate appearance of the final inning, and only when
+    he was pulled mid-inning.
+
+    Checked against published season totals for Corbin Burnes: 17.55 outs
+    per start in 2025 against a published 64.1 IP over 11 starts (17.55),
+    18.22 in 2024 against 194.1 over 32 (18.22), 18.33 in 2022 against
+    202.0 over 33 (18.36) -- one out adrift across a full season.
+    """
+    need = {"outs_when_up", "inning", "at_bat_number", "events"}
+    if not need.issubset(work.columns):
+        return pd.Series(dtype=float)
+    w = work.dropna(subset=["outs_when_up", "inning"]).copy()
+    if w.empty:
+        return pd.Series(dtype=float)
+    w["inning"] = w["inning"].astype(int)
+    w["outs_when_up"] = w["outs_when_up"].astype(int)
+    half_keys = ["pitcher", "game_pk", "inning"]
+    if "inning_topbot" in w.columns:
+        half_keys.append("inning_topbot")
+    w = w.sort_values(["pitcher", "game_pk", "inning", "at_bat_number"])
+
+    half = (w.groupby(half_keys, sort=False)
+             .agg(entry=("outs_when_up", "min"),
+                  last_outs=("outs_when_up", "last"),
+                  last_event=("events", "last"))
+             .reset_index())
+    final = half.groupby(["pitcher", "game_pk"])["inning"].transform("max")
+    made = half["last_event"].map(OUT_EVENTS).fillna(0).to_numpy()
+    outs = np.where(half["inning"].to_numpy() != final.to_numpy(),
+                    3 - half["entry"].to_numpy(),
+                    half["last_outs"].to_numpy() + made
+                    - half["entry"].to_numpy())
+    half["outs"] = np.clip(outs, 0, 3)
+    return half.groupby(["pitcher", "game_pk"])["outs"].sum()
+
 
 def identify_starts(pa: pd.DataFrame) -> pd.DataFrame:
     """
@@ -166,6 +246,12 @@ def identify_starts(pa: pd.DataFrame) -> pd.DataFrame:
                   game_date=("game_date", "first"))
              .reset_index())
     starts = g[g["first_inning"] == 1].copy()
+    outs = _outs_by_start(work)
+    if len(outs):
+        starts["outs"] = (starts.set_index(["pitcher", "game_pk"]).index
+                          .map(outs).astype(float))
+    else:
+        starts["outs"] = np.nan
     starts["year"] = starts["game_date"].dt.year
     opener = ((starts["bf"] < OPENER_MAX_BF)
               & (starts["last_inning"] < OPENER_MAX_INNING))
@@ -354,6 +440,50 @@ class WorkloadModel:
         # Not used by the model. Carried so the dashboard can say which
         # kind of zero this is, the same way the form marker is measured
         # and shown without feeding anything.
+        # ---- outs recorded, fitted exactly like batters faced ------
+        #
+        # Same window, same shrinkage shape, for the reason given at the
+        # top of fit(): two readings of one drifting league measured over
+        # different periods is how the two halves end up wrong in
+        # opposite directions while the total looks right.
+        #
+        # Kept SEPARATE from batters faced rather than derived from it.
+        # Causally outs come first -- a manager pulls a starter by innings
+        # and pitch count, and batters faced is the consequence of outs
+        # plus whoever reached -- so rebuilding BF on top of outs would be
+        # the more correct model. It would also disturb the K prop, which
+        # is validated and working. Coherence is checked instead: see
+        # implied_baserunners below.
+        outs_col = usable["outs"].dropna() if "outs" in usable else pd.Series(dtype=float)
+        if len(outs_col) >= 100:
+            oc = usable.dropna(subset=["outs"])
+            counts_o = oc["outs"].round().astype(int).clip(0, MAX_OUTS) \
+                .value_counts().sort_index()
+            model.outs_support = counts_o.index.to_numpy(dtype=float)
+            model.outs_league_pmf = (counts_o / counts_o.sum()).to_numpy(dtype=float)
+            model.outs_league_mean = float(oc["outs"].mean())
+            thin_o = thin.dropna(subset=["outs"]) if "outs" in thin else thin.iloc[0:0]
+            model.new_pitcher_outs = (float(thin_o["outs"].mean())
+                                      if len(thin_o) >= 30
+                                      else model.outs_league_mean)
+            by_o = oc.groupby("pitcher")["outs"]
+            n_o, raw_o = by_o.size(), by_o.mean()
+            prior_o = pd.Series(
+                np.where(is_new.reindex(n_o.index).fillna(True),
+                         model.new_pitcher_outs, model.outs_league_mean),
+                index=n_o.index)
+            model.pitcher_outs = (
+                (raw_o * n_o + prior_o * OUTS_PRIOR_STARTS)
+                / (n_o + OUTS_PRIOR_STARTS)).to_dict()
+            if verbose:
+                print(f"    Outs recorded: league {model.outs_league_mean:.2f} "
+                      f"({model.outs_league_mean / 3:.2f} innings); a pitcher "
+                      f"with <= {NEW_PITCHER_MAX_PRIOR} prior starts records "
+                      f"{model.new_pitcher_outs:.2f}.")
+        elif verbose:
+            print("    Outs recorded: too few starts carry an outs figure "
+                  "to fit; the outs prop will be skipped.")
+
         model.career_start_counts = career_starts.to_dict()
         model.last_start_dates = (career.groupby("pitcher")["game_date"]
                                   .max().to_dict())
@@ -382,10 +512,52 @@ class WorkloadModel:
             return float("nan")
         return float((pd.Timestamp(as_of) - pd.Timestamp(last)).days)
 
+    def expected_outs(self, pitcher_id) -> float:
+        """Shrunk outs recorded. NaN when the outs half was not fitted."""
+        if not _outs_ok(self):
+            return float("nan")
+        return float(getattr(self, "pitcher_outs", {}).get(
+            pitcher_id, getattr(self, "new_pitcher_outs",
+                                self.outs_league_mean)))
+
+    def outs_pmf(self, pitcher_id) -> tuple:
+        """
+        (support, probabilities) for outs recorded tonight.
+
+        The league SHAPE tilted onto his mean, the same device bf_pmf
+        uses -- of all the distributions with the required mean this is
+        the one closest to the league's, so a pitcher who goes deep gets
+        the real shape of outcomes shifted up rather than an invented one.
+        """
+        if not _outs_ok(self):
+            return None, None
+        return (self.outs_support,
+                _tilt_pmf(self.outs_support, self.outs_league_pmf,
+                          self.expected_outs(pitcher_id)))
+
+    def implied_baserunners(self, pitcher_id) -> float:
+        """
+        Projected batters faced minus projected outs.
+
+        The coherence check between the two halves. It should land near
+        the league's baserunners per start (hits + walks + hit batsmen,
+        roughly 10-11). A number far from that means the two fits
+        disagree about the same pitcher's night, which is exactly the
+        failure mode that fitting them over one window is meant to avoid.
+        """
+        if not _outs_ok(self):
+            return float("nan")
+        return self.expected_bf(pitcher_id) - self.expected_outs(pitcher_id)
+
     def bf_pmf(self, pitcher_id) -> tuple:
         """(support, probabilities) for how many batters he faces tonight."""
         target = self.expected_bf(pitcher_id)
         return self.support, _tilt_pmf(self.support, self.league_pmf, target)
+
+
+def _outs_ok(model) -> bool:
+    """Whether the outs half of the model was fitted at all."""
+    return getattr(model, "outs_support", None) is not None
 
 
 def k_count_distribution(p_by_batter, support, bf_probs,

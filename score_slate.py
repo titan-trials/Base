@@ -58,7 +58,7 @@ from data.cache import cache_path
 from data.refresh import refresh_players
 from features.pa_table import build_pa_table, build_game_totals
 from data.batting_lines import get_batting_lines
-from data.pitching_lines import get_pitching_lines
+from data.pitching_lines import get_pitching_lines, _innings_to_float
 from compare_market import score_against_market
 from features.run_features import build_run_training_frame
 from model.hr_v4 import evaluate, bootstrap_brier_skill, reliability_by_quantile
@@ -244,6 +244,9 @@ PITCHER_LOG_KEY = "pitcher_scoring_log"
 # the established can be compared without re-deriving anything.
 PITCHER_ROWS_KEY = "pitcher_row_log"
 K_LINES = (5.5, 6.5)
+# Must match predict_slate.OUTS_LINES -- the scorer reads the columns the
+# predictor wrote, and a line in one and not the other scores nothing.
+OUTS_LINES = (14.5, 15.5, 16.5, 17.5, 18.5)
 K_MODEL_CHANGED = "2026-09-05"
 
 
@@ -262,10 +265,13 @@ def _log_pitcher_rows(basis: pd.DataFrame, game_date: str):
     before predict_slate started exporting them still contributes its
     strikeout and batters-faced numbers.
     """
-    keep = ["pitcher", "pitcher_id", "team", "opponent", "starts_seen",
-            "career_starts", "days_since_last_start", "expected_bf",
-            "expected_k", "k_rate", "batters_faced", "strikeouts",
-            "innings_pitched"] + [f"prob_k_over_{line}" for line in K_LINES]
+    keep = (["pitcher", "pitcher_id", "team", "opponent", "starts_seen",
+             "career_starts", "days_since_last_start", "expected_bf",
+             "expected_k", "expected_outs", "implied_baserunners", "k_rate",
+             "batters_faced", "strikeouts", "innings_pitched",
+             "outs_recorded"]
+            + [f"prob_k_over_{line}" for line in K_LINES]
+            + [f"prob_outs_over_{line}" for line in OUTS_LINES])
     rows = basis[[c for c in keep if c in basis.columns]].copy()
     if rows.empty:
         return
@@ -277,6 +283,8 @@ def _log_pitcher_rows(basis: pd.DataFrame, game_date: str):
         rows["k_error"] = rows["expected_k"] - rows["strikeouts"]
     if {"expected_bf", "batters_faced"}.issubset(rows.columns):
         rows["bf_error"] = rows["expected_bf"] - rows["batters_faced"]
+    if {"expected_outs", "outs_recorded"}.issubset(rows.columns):
+        rows["outs_error"] = rows["expected_outs"] - rows["outs_recorded"]
 
     path = cache_path(PITCHER_ROWS_KEY)
     if os.path.exists(path):
@@ -342,6 +350,14 @@ def score_pitchers(game_date: str):
         print("  None of the projected starters started. Nothing to score.")
         return None
 
+    # Outs actually recorded. "6.2" innings is six and two thirds, which
+    # data/pitching_lines._innings_to_float already knows; times three it
+    # is the truth the outs prop is graded against. No extra fetch -- the
+    # boxscore line was already pulled for batters faced.
+    if "innings_pitched" in merged.columns:
+        merged["outs_recorded"] = (
+            merged["innings_pitched"].map(_innings_to_float) * 3).round()
+
     merged[CLEAN_COL] = clean_mask(merged)
     n_clean = int(merged[CLEAN_COL].sum())
 
@@ -362,6 +378,14 @@ def score_pitchers(game_date: str):
         print(f"    Strikeouts:    predicted {frame['expected_k'].mean():.2f}, "
               f"actual {frame['strikeouts'].mean():.2f} "
               f"({frame['expected_k'].mean() - frame['strikeouts'].mean():+.2f})")
+        if {"expected_outs", "outs_recorded"}.issubset(frame.columns):
+            o = frame.dropna(subset=["expected_outs", "outs_recorded"])
+            if len(o):
+                print(f"    Outs recorded: predicted {o['expected_outs'].mean():.2f}"
+                      f" ({o['expected_outs'].mean() / 3:.2f} IP), actual "
+                      f"{o['outs_recorded'].mean():.2f} "
+                      f"({o['outs_recorded'].mean() / 3:.2f} IP) "
+                      f"({o['expected_outs'].mean() - o['outs_recorded'].mean():+.2f})")
 
     if n_clean < len(merged):
         _summary(merged, "Every starter, including games already underway")
@@ -377,24 +401,42 @@ def score_pitchers(game_date: str):
     _summary(basis, "Predicted before first pitch -- the ones that count")
 
     rows = []
-    for line in K_LINES:
-        col = f"prob_k_over_{line}"
-        if col not in basis.columns:
+    graded = [("prob_k_over_", "strikeouts", K_LINES)]
+    if "outs_recorded" in basis.columns:
+        graded.append(("prob_outs_over_", "outs_recorded", OUTS_LINES))
+    for prefix, truth_col, lines in graded:
+      for line in lines:
+        col = f"{prefix}{line}"
+        if col not in basis.columns or truth_col not in basis.columns:
             continue
-        truth = (basis["strikeouts"] > line).astype(int)
-        said = float(basis[col].mean())
+        sub = basis.dropna(subset=[col, truth_col])
+        if len(sub) < 2:
+            continue
+        truth = (sub[truth_col] > line).astype(int)
+        # `sub`, not `basis`: the two differ whenever a starter is missing
+        # this prop's prediction, and mixing them silently compares one
+        # pitcher's probability against another's outcome.
+        said = float(sub[col].mean())
         did = float(truth.mean())
-        brier = float(((basis[col] - truth) ** 2).mean())
+        brier = float(((sub[col] - truth) ** 2).mean())
         ref = did * (1.0 - did)
         rows.append({
-            "game_date": game_date, "line": line, "n": len(basis),
+            "game_date": game_date,
+            # Without this, "line 14.5" and "line 5.5" are two rows of the
+            # same table describing different sports.
+            "prop": "outs" if truth_col == "outs_recorded" else "strikeouts",
+            "line": line, "n": len(sub),
             "basis": basis_name, "mean_pred": said, "base_rate": did,
             "brier": brier,
             "brier_skill": 1.0 - brier / ref if ref > 0 else float("nan"),
-            "pred_bf": float(basis["expected_bf"].mean()),
-            "actual_bf": float(basis["batters_faced"].mean()),
-            "pred_k": float(basis["expected_k"].mean()),
-            "actual_k": float(basis["strikeouts"].mean()),
+            "pred_bf": float(sub["expected_bf"].mean()),
+            "actual_bf": float(sub["batters_faced"].mean()),
+            "pred_k": float(sub["expected_k"].mean()),
+            "actual_k": float(sub["strikeouts"].mean()),
+            "pred_outs": float(sub["expected_outs"].mean())
+            if "expected_outs" in sub else float("nan"),
+            "actual_outs": float(sub["outs_recorded"].mean())
+            if "outs_recorded" in sub else float("nan"),
         })
     if not rows:
         return None
@@ -418,6 +460,12 @@ def score_pitchers(game_date: str):
 
     _log_pitcher_rows(basis, game_date)
 
+    # Every row written before the outs prop existed is a strikeout row.
+    # Labelling them rather than dropping them keeps the K history intact.
+    if "prop" not in log.columns:
+        log["prop"] = "strikeouts"
+    log["prop"] = log["prop"].fillna("strikeouts")
+
     print("\n" + "-" * 72)
     print(f"RUNNING TOTAL across {log['game_date'].nunique()} slate(s)")
     print("-" * 72)
@@ -438,9 +486,10 @@ def score_pitchers(game_date: str):
             "actual_bf": float(np.average(g["actual_bf"], weights=w)),
         })
 
-    running = log.groupby("line")[
-        ["n", "base_rate", "brier", "mean_pred", "pred_bf", "actual_bf",
-         "game_date"]].apply(_pool).reset_index()
+    POOL_COLS = ["n", "base_rate", "brier", "mean_pred", "pred_bf",
+                 "actual_bf", "game_date"]
+    running = (log.groupby(["prop", "line"])[POOL_COLS]
+               .apply(_pool).reset_index())
     print(running.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
     # The per-batter rate the prop compounds changed on this date (the
     # validated 12-month rate replaced an untested career-window path).
@@ -448,10 +497,9 @@ def score_pitchers(game_date: str):
     since = log[pd.to_datetime(log["game_date"]) >= pd.Timestamp(K_MODEL_CHANGED)]
     if len(since) and len(since) < len(log):
         print(f"\n  Since {K_MODEL_CHANGED} (current K path only):")
-        print(since.groupby("line")[
-            ["n", "base_rate", "brier", "mean_pred", "pred_bf", "actual_bf",
-             "game_date"]].apply(_pool).reset_index()
-            .to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+        print(since.groupby(["prop", "line"])[POOL_COLS]
+              .apply(_pool).reset_index()
+              .to_string(index=False, float_format=lambda v: f"{v:.4f}"))
     print(f"\n  Rolling-origin backtest on the DEPLOYED path (backtest_k_props.py,")
     print(f"  2,834 starts Apr-Aug 2026) gave +0.094 (over 5.5) and +0.097 (over 6.5).")
     print(f"  Rows before 2026-09-05 were produced by a different, untested path")

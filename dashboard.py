@@ -849,6 +849,21 @@ with tab_pitch:
         k_cuts = {c: [float(pit[c].quantile(q)) for q in (.25, .50, .75)]
                   for c in ("prob_k_over_5.5", "prob_k_over_6.5")}
 
+        o_cols = [c for c in ("prob_outs_over_14.5", "prob_outs_over_17.5")
+                  if c in pit.columns and pit[c].notna().any()]
+        o_cuts = {c: [float(pit[c].quantile(q)) for q in (.25, .50, .75)]
+                  for c in o_cols}
+
+        def ocell(value, col):
+            if col not in o_cuts or pd.isna(value):
+                return '<td style="color:var(--ink3);text-align:center">—</td>'
+            band = band_of(value, o_cuts[col])
+            if band == 0:
+                return '<td style="color:var(--ink3)">—</td>'
+            bg, ink = BANDS[band]
+            return (f'<td style="background:{bg};color:{ink};font-weight:560;'
+                    f'text-align:center;border-radius:6px">{pct(value)}</td>')
+
         def kcell(value, col):
             band = band_of(value, k_cuts[col])
             if band == 0:
@@ -898,6 +913,20 @@ with tab_pitch:
                 f'font-weight:560">{r["expected_k"]:.1f}</td>'
                 + kcell(r.get("prob_k_over_5.5"), "prob_k_over_5.5")
                 + kcell(r.get("prob_k_over_6.5"), "prob_k_over_6.5")
+                # Outs, shown as innings because that is how anyone
+                # actually thinks about a starter's night. 17.5 outs is
+                # "gets through six", which is the decision a manager is
+                # making -- and batters faced, which drives the strikeout
+                # number to its left, is the consequence of it.
+                + (f'<td style="color:var(--ink2);text-align:center;'
+                   f'font-variant-numeric:tabular-nums">'
+                   f'{r["expected_outs"]:.1f}'
+                   f'<span style="color:var(--ink3);font-size:11px"> '
+                   f'({r["expected_outs"] / 3:.1f} ip)</span></td>'
+                   if pd.notna(r.get("expected_outs")) else
+                   '<td style="color:var(--ink3);text-align:center">—</td>')
+                + ocell(r.get("prob_outs_over_14.5"), "prob_outs_over_14.5")
+                + ocell(r.get("prob_outs_over_17.5"), "prob_outs_over_17.5")
                 + '</tr>')
         html('<table class="plain"><thead><tr><th>Pitcher</th><th>Team</th>'
              '<th>Opponent</th><th style="text-align:center">Starts</th>'
@@ -905,6 +934,9 @@ with tab_pitch:
              '<th style="text-align:center">Expected K</th>'
              '<th style="text-align:center">Over 5.5 K</th>'
              '<th style="text-align:center">Over 6.5 K</th>'
+             '<th style="text-align:center">Outs</th>'
+             '<th style="text-align:center">Over 14.5</th>'
+             '<th style="text-align:center">Over 17.5</th>'
              '</tr></thead><tbody>' + rows + '</tbody></table>')
         thin_n = int((pit["starts_seen"] <= THIN_STARTS).sum()) \
             if "starts_seen" in pit else 0
@@ -922,7 +954,13 @@ with tab_pitch:
              f'line-height:1.55">Colour is which quarter of tonight\'s '
              f'starters he falls into{note}. Batters faced is what drives '
              f'everything else — a pitcher pulled in the fourth cannot '
-             f'reach six strikeouts however good his rate is.</div>')
+             f'reach six strikeouts however good his rate is.<br>'
+             f'<b style="color:var(--ink2)">Outs</b> is that same idea '
+             f'stated directly: 14.5 is getting through five innings, 17.5 '
+             f'through six. Model only — the outs market is charged per '
+             f'game and would double the odds bill, so these are graded '
+             f'against real innings pitched rather than against a price.'
+             f'</div>')
 
     elif "opposing_pitcher" not in df.columns:
         st.info("This slate file has no pitcher information.")
