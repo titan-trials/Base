@@ -14,6 +14,277 @@ real, useful outcome of the project, not a failure to fix.
 
 ---
 
+## V11 (Sep 6-12, 2026) — three bugs found by looking at outputs, and a new prop
+
+Nothing in this version came from planning a feature. Every item is
+something that turned up while reading numbers that were already on the
+screen, which is the argument for putting numbers on the screen.
+
+### The flag lab, run properly — two verdicts flipped
+
+`fixes-2026-09-05.md` recorded the flag results from ONE held-out period.
+Re-run as `flag_lab.py --origins 3` (246k PAs; cuts 2024-08-29 /
+2025-05-26 / 2025-08-27), two of five changed:
+
+| Flag | One origin said | Three origins say |
+|---|---|---|
+| PER_HITTER_SHAPE | worth turning on | confirmed — **ON since 9/06** |
+| PITCHER_RATE_WINDOW_DAYS | "is_k BETTER +0.0007" | noise; **WORSE on walks at 2 of 3** |
+| LOGIT_FEATURES | "negligible" | BETTER on is_k ×3 — on a dead target |
+| LEAGUE_PRIOR_TRAILING_DAYS | negligible | negligible 12/12 |
+| PLATOON_SPLIT | negligible | negligible 12/12 |
+
+PER_HITTER_SHAPE, all four total-bases lines (the 2.5 row was missing
+from the 9/05 write-up entirely):
+
+| Line | 2024-08-29 | 2025-05-26 | 2025-08-27 |
+|---|---|---|---|
+| 0.5 | +0.0066 | +0.0065 | +0.0069 |
+| 1.5 | +0.0018 | +0.0019 | +0.0021 |
+| 2.5 | −0.0001 | −0.0000 | −0.0002 |
+| 3.5 | +0.0015 | +0.0017 | +0.0015 |
+
+0.5 and 1.5 exclude zero at every origin and replicate almost exactly;
+2.5 is a true no-op (|gain| <= 0.0002 against a 0.0005 floor), not a cost.
+**Scoring-log rows before 2026-09-06 were produced with the flag OFF**, so
+pooled total-bases numbers mix two models across that date.
+
+LOGIT_FEATURES is the instructive one. It is BETTER on `is_k` at all
+three origins with calibration improving (dECE −0.0022 to −0.0028) — and
+since the 9/05 K rewrite `is_k` no longer reaches any graded prop. The
+pitcher strikeout prop compounds `per_batter_k_probs` (measured rates, no
+regression), and `score_slate` grades no hitter strikeout prop. A flag
+that is genuinely better on a target nothing reads is worth nothing.
+
+Two Tier-2 predictions from the review are now measured and dead: the
+trailing league prior (the era-drift argument, which DID matter on the
+pitcher side) is negligible 12/12 for hitters, and split platoon
+coefficients are negligible 12/12.
+
+`flag_lab.py` now appends every row of every trial to
+`cache/flag_lab_results.csv`. It previously printed and wrote nothing,
+which is why the missing 2.5 line could not be looked up, only
+re-measured. **A lab whose output exists only in a terminal has not
+finished.**
+
+### Bug 1 — in-play prices were being graded as closing lines
+
+The worst of the three, because it corrupted the one benchmark that
+answers "is this good" rather than "is this better than nothing".
+
+The Odds API keeps returning a game after first pitch with LIVE odds
+attached. Nothing filtered them. On 2026-09-06, **10 of 14** game-line
+rows were priced in-play, including a 0.971 and a 0.086 — teams four runs
+up and four runs down, priced as though somebody had forecast it. That
+handed the "market" a Brier of **0.1368** against the model's 0.2401.
+
+No book prices baseball moneylines at 0.137. The model was being graded
+against hindsight.
+
+Recomputed on pre-game prices only, 2026-09-05 **reverses**:
+
+| 9/05 | n | Market Brier | Model Brier |
+|---|---|---|---|
+| As logged (2 in-play) | 15 | 0.2495 | 0.2540 |
+| Pre-game only | 13 | **0.2811** | **0.2509** |
+
+Three fixes, at three layers:
+- `data/odds_lines.fetch_slate_odds` skips started games **before**
+  spending a credit. Player props are charged per event, so a started
+  game costs a credit and returns a price that cannot be used. Same
+  exclusion, credit kept.
+- `fetch_game_lines` cannot skip per event (one call, whole slate) so it
+  discards started games from the response instead.
+- `compare_market` and `score_teams` both drop rows whose price was taken
+  after their own first pitch, which cleans files captured before the fix.
+
+### Bug 2 — captures overwrote each other
+
+Discovered immediately after Bug 1, and *caused* by its fix. Once started
+games are skipped, a late run returns only the games still to come — and
+`to_csv` replaced the whole file with those few. On 9/06 a 31-line
+capture became 7. **Odds are the one input that cannot be re-fetched at
+any price**; predictions are protected after the fact by
+`preserve_committed_rows` and odds have no equivalent.
+
+Both odds files and `market_compare_*` now MERGE: a game absent from the
+new capture keeps its earlier row, a game in both takes the newer price
+(a later pre-game price is a better closing line). Each row carries its
+own `fetched_at_utc`, so one file legitimately holds several capture
+times and readers can tell which price was taken when.
+
+### Bug 3 — the workload model was fitted before its own data arrived
+
+`predict_slate` fitted `WorkloadModel` from `load_starter_history`, which
+is **cache-only by design**, and then called `build_pitcher_rates` — the
+call that FETCHES a starter's Statcast and creates that cache — a hundred
+lines later.
+
+So any pitcher appearing on a slate for the first time had no cache file
+at fit time: zero starts, league-mean priors, and his full history
+written a minute too late to be read. On 2026-09-07 that was **Joe Ryan
+(132 career starts), Nick Pivetta, Brayan Bello, Jonah Tong and Derek
+Law**, all reported as debutants. Cache file mtimes 15:10:03-15:11:13
+against a prediction stamped 15:12:23.
+
+It looked like debuts rather than a defect because the same pitcher never
+showed zero twice — his cache existed by the next slate. Fixed by moving
+the fit below the fetch; nothing between them used it (checked by AST
+name reference, not by text search).
+
+This had been true since the K model went live, and September is call-up
+season, so it was getting worse.
+
+### The per-pitcher row log, and what it found in one query
+
+`pitcher_scoring_log.csv` keeps two rows per slate. It can answer "how is
+the K model doing" and nothing else — no pitcher in it, so every other
+question needed the whole join rebuilt from prediction files and the
+boxscore cache.
+
+`score_slate` now also writes `cache/pitcher_row_log.csv`: one row per
+graded starter with `starts_seen`, `career_starts`, `days_since_last_start`,
+projections, actuals and residuals. Backfilled to 192 starters across 8
+slates. It answered the standing question on the first query:
+
+| Starts in window | n | Proj BF | Actual BF | BF error | K error |
+|---|---|---|---|---|---|
+| **0** | 11 | 22.6 | **12.8** | **+9.8** | +1.80 |
+| 1-4 | 15 | 21.6 | 17.2 | +4.4 | +0.92 |
+| 5-10 | 14 | 21.9 | 21.8 | +0.1 | +1.00 |
+| 11-19 | 42 | 22.0 | 22.2 | −0.2 | +0.26 |
+| 20+ | 110 | 23.0 | 22.6 | +0.3 | +0.25 |
+
+Under 20 starts the model runs **+0.71 K high (t = +3.07)**; over 20,
++0.25 and not significant.
+
+But the error is concentrated almost entirely at zero, and it is **not
+the strikeout rate — it is batters faced**. Projected 22.6, actual 12.8.
+Trevor Williams faced 3. Derek Law faced 6. These are openers and bullpen
+games priced as if they will go six innings. Excluding the one row
+mislabelled by Bug 3, the genuinely-thin ten still face 13.5 against 22.6
+projected. **The zero-start prior is roughly nine batters — three innings
+— too generous.**
+
+### Two kinds of zero
+
+`starts_seen == 0` means a debut OR a veteran back from a long layoff,
+and they want different priors. `WorkloadModel` now keeps
+`career_starts` and `last_start_dates`; `predict_slate` exports both.
+
+    Burnes   window 0   career 107   464 days out  ->  returning
+    Ryan     window 25  career 130    35 days out  ->  established
+    Tong     window 2   career   4   349 days out  ->  debut/thin
+
+Days-out alone does not separate them — Tong has been away nearly as long
+as Burnes. It takes both numbers. Not a model input: a marker, the same
+arrangement as the form marker.
+
+Burnes on 9/08 is the case to watch: the model said 23.0 batters faced and
+5.0 K where the market had him at 59.8% over 2.5 K against the model's
+87.7%. A pitcher back from fifteen months is on a leash no prior measured
+from debutants knows about.
+
+### NEW: the outs prop
+
+Outs recorded — the market's "pitcher outs", and arguably more fundamental
+than strikeouts, since a manager pulls a starter by innings and pitch
+count and batters faced is the *consequence*.
+
+**Deriving outs was the whole problem, and the obvious method is wrong.**
+Mapping each event to the outs it records and summing gives, measured over
+one pitcher's 2,000 plate appearances, 0.018 outs for `single` and 0.989
+for `strikeout` — because runners are thrown out BETWEEN plate appearances
+and the batter's event cannot see it. A few percent per PA is half an out
+per start.
+
+A completed half-inning has no such problem: it is worth exactly
+`3 - outs when he entered`, whatever happened on the bases. And a starter
+who appears in inning n+1 completed inning n. So every half-inning but his
+last is exact, and the event map is used for at most one plate appearance
+per start. Checked against published season totals:
+
+| Year | Derived | Published |
+|---|---|---|
+| 2025 | 17.55 outs (5.85 IP) | 5.85 IP |
+| 2024 | 18.22 outs (6.07 IP) | 6.07 IP |
+| 2022 | 18.33 outs (6.11 IP) | 6.12 IP |
+
+Fitted exactly like batters faced — same window, same shrinkage, league
+shape exponentially tilted onto the pitcher's mean — so `outs_pmf` answers
+any line, and `outs_dist` is stored alongside `k_dist`. Lines published:
+14.5 through 18.5.
+
+**Kept separate from batters faced rather than derived from it.** Causally
+outs come first, but rebuilding BF on outs would disturb the validated K
+prop. Coherence is checked instead: `implied_baserunners` = projected BF
+minus projected outs. Measured on 280 real starts it is **6.85**, against
+6.53 actual baserunners — the 0.32 gap is double plays and runners thrown
+out, where one batter yields two outs. Expect 6.0 to 7.5.
+
+Graded against real innings pitched from the boxscore line already pulled
+for batters faced, so it costs no extra fetch. **Model only** — the outs
+market is charged per event and would have taken the odds bill from 17 to
+32 credits a night, which does not fit a 500-credit month.
+
+### Dashboard
+
+- **Pitchers table is a sortable dataframe**, like All hitters. Two things
+  that were crammed into cells became columns, because a column can be
+  sorted and a suffix cannot: **IP** (was "(5.3 ip)" inside the Outs cell)
+  and **Rest** (days since last start — better than the BACK chip it
+  replaced, because normal rest is 4-6 days so a 464 sorts to the top and
+  a 6-day and a 40-day layoff stop being the same badge).
+- Amber thresholds: **<= 10 starts** on the Pitchers tab (the K prior is
+  250 batters faced, about ten starts before a pitcher's own rate leads),
+  **< 20** on the market table, where the bar is higher because a
+  disagreement with five books means nothing if the model half-knows him.
+- Results tab: a **Ranking (AUC) column** and a collapsible "How to read
+  this" built from the live log. Discrimination was invisible on that page
+  — a model that quotes the league rate to everyone matches every total
+  and has an AUC of 0.50, and calibration alone cannot tell those apart.
+- **Game Lines tab retired** (`SHOW_GAME_LINES = False`, one line to
+  restore). Four graded slates: home-win Brier 0.237-0.265 against 0.25
+  for a coin flip, win probabilities never leaving 0.45-0.57, totals about
+  half a run worse than the market. The team model keeps running and keeps
+  being graded into `team_scoring_log.csv`; it just no longer costs a tab.
+- **"My team"** — up to 8 saved hitters in the sidebar, kept in the URL
+  (the deployed app is one process, so a file would be a single global
+  list every viewer overwrote).
+
+### Odds budget
+
+Player props are per event (~15/night), game lines per market for the
+whole slate (2). Dropping game lines takes the nightly bill from 17 to
+**15**, and coverage from 29 nights per 500 credits to **33**.
+
+Everything else in the pipeline is free: `check_lineups` is one schedule
+call, `predict_slate` is Statcast and models, `compare_market` reads local
+files. So re-running predictions late to pick up confirmed lineups costs
+nothing and should be done.
+
+`run_slate.py` runs the four steps in dependency order and refuses to buy
+odds if predictions failed. It exists because the manual order had
+`compare_market` (which READS `pitchers_{date}.csv`) running before
+`predict_slate` (which WRITES it) — producing no output, no log row, and
+no error.
+
+### Two bug shapes worth remembering
+
+**`int(x or 0)` is not NaN-safe.** NaN is truthy, so `float("nan") or 0`
+evaluates to NaN and `int()` raises. The guard reads like it handles
+missing values and handles only `None` and zero. Now `_int_or()`.
+
+**Every new column arrives half-populated on the first re-run.**
+`preserve_committed_rows` deliberately mixes rows written by different
+versions of the code, so a column added today is present on refreshed rows
+and absent on preserved ones. Present-but-NaN is a different case from
+absent, and it is the one that breaks. Both the outs columns and
+`career_starts` shipped with that case tested; `career_starts` shipped
+without it and took the dashboard down.
+
+---
+
 ## V10 (Sep 5, 2026) — a review, fourteen fixes, and one self-inflicted wound
 
 A full read of the code against the docs (`model-review-2026-09-05.md`,
@@ -1225,6 +1496,33 @@ Delete the relevant file(s) in `cache/` to force a fresh pull:
 ---
 
 ## Known Issues / Technical Debt
+- **The zero-start batters-faced prior is about three innings too
+  generous** (V11). Measured on 11 graded starts: projected 22.6, actual
+  12.8. These are openers and bullpen games, and the prior was measured
+  from career-thin starters rather than from "projected starter who is
+  actually an opener". The per-pitcher row log is accumulating the
+  evidence; do not tune it on eleven rows.
+- **A pitcher returning from a long layoff gets the debutant prior.**
+  `career_starts` and `days_since_last_start` are now exported and marked
+  but not used by the model. A rehab return is on a shorter leash than a
+  call-up and probably wants its own prior — needs more than the one
+  Burnes case to fit.
+- **The outs prop has no market benchmark.** Model-only by choice (the
+  outs market is charged per event, ~15 credits a night, which does not
+  fit the 500-credit budget alongside strikeouts). It is graded against
+  real innings pitched, so "better than nothing" is answerable and "better
+  than the book" is not.
+- **The hitter strikeout prop (`prob_k`) is written and never graded.**
+  `score_slate` grades no binary K prop, so the column on the dashboard
+  has never been checked. Small fix — the truth column is already in the
+  PA table, it needs adding to `BINARY_PROPS`.
+- **Total bases pools two models across 2026-09-06**, the date
+  `PER_HITTER_SHAPE` was turned on. Read a step change there as the flag,
+  not as noise.
+- **The team model is graded but unread** (V11). `teams_*.csv` and
+  `team_scoring_log.csv` keep being written; the tab is off. It has no
+  home-field term — the measured home-minus-away residual across four
+  slates averaged NEGATIVE, so adding one on theory would have been wrong.
 - **RBI target code still present but unused** — `add_rbi_target` in
   `features/prop_targets.py` was left in the file after RBI was dropped
   as a target. Harmless dead code; fine to delete later if desired.

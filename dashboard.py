@@ -639,8 +639,33 @@ if _when_class == "past":
          f'You are looking at what the model said before '
          f'{_when.lower()}\'s slate, not at tonight\'s.</div>')
 
-tab_slate, tab_games, tab_pitch, tab_lines, tab_all, tab_res = st.tabs(
-    ["Slate", "Games", "Pitchers", "Game Lines", "All hitters", "Results"])
+# The Game Lines tab is retired, not deleted.
+#
+# It showed the team model: projected score, win probability, and who the
+# model expected to do the scoring. Graded over four slates it had no
+# skill at picking winners -- home-win Brier 0.237 to 0.265 against 0.25
+# for a coin flip -- because the win probabilities only ever spanned 0.45
+# to 0.57. It also projected total runs about half a run worse than the
+# market. A tab that cannot separate tonight's games is a tab that costs
+# attention and returns nothing.
+#
+# Everything behind it keeps running: predict_slate still writes
+# cache/teams_{date}.csv and score_slate.score_teams still grades it
+# against final scores into team_scoring_log.csv. If the model ever gets
+# a real home-field term or a wider spread, flip this back to True and
+# the tab returns exactly as it was.
+SHOW_GAME_LINES = False
+
+_TAB_LABELS = ["Slate", "Games", "Pitchers", "All hitters", "Results"]
+if SHOW_GAME_LINES:
+    _TAB_LABELS.insert(3, "Game Lines")
+_TABS = dict(zip(_TAB_LABELS, st.tabs(_TAB_LABELS)))
+tab_slate = _TABS["Slate"]
+tab_games = _TABS["Games"]
+tab_pitch = _TABS["Pitchers"]
+tab_all = _TABS["All hitters"]
+tab_res = _TABS["Results"]
+tab_lines = _TABS.get("Game Lines")
 
 
 def form_chip(row) -> str:
@@ -1033,126 +1058,127 @@ with tab_pitch:
 
 
 # ------------------------------------------------------------ game lines
-with tab_lines:
-    html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
-         'Game lines</div><div style="color:var(--ink3);font-size:12.5px;'
-         'margin-bottom:14px">Who wins, by how much, and who does the '
-         'scoring. Built by adding up the same hitters shown on every '
-         'other tab — no separate team model to disagree with them.</div>')
+if SHOW_GAME_LINES:
+    with tab_lines:
+        html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
+             'Game lines</div><div style="color:var(--ink3);font-size:12.5px;'
+             'margin-bottom:14px">Who wins, by how much, and who does the '
+             'scoring. Built by adding up the same hitters shown on every '
+             'other tab — no separate team model to disagree with them.</div>')
 
-    games_path = os.path.join(CACHE_DIR, f"teams_{slate_date}.csv")
-    games_df = None
-    if os.path.exists(games_path):
-        try:
-            games_df = pd.read_csv(games_path)
-        except Exception:
-            games_df = None
+        games_path = os.path.join(CACHE_DIR, f"teams_{slate_date}.csv")
+        games_df = None
+        if os.path.exists(games_path):
+            try:
+                games_df = pd.read_csv(games_path)
+            except Exception:
+                games_df = None
 
-    if games_df is None or games_df.empty:
-        html('<div class="sp-empty">No game predictions for this slate.<br>'
-             '<span style="color:var(--ink3);font-size:12px">'
-             'Written by <code>predict_slate.py</code> alongside the hitter '
-             'props. A slate predicted before this tab existed will not '
-             'have them.</span></div>')
-    else:
-        if "start_time_utc" in games_df:
-            games_df["start"] = pd.to_datetime(
-                games_df["start_time_utc"], utc=True, errors="coerce"
-            ).dt.tz_convert("America/New_York")
-            games_df = games_df.sort_values("start", na_position="last")
+        if games_df is None or games_df.empty:
+            html('<div class="sp-empty">No game predictions for this slate.<br>'
+                 '<span style="color:var(--ink3);font-size:12px">'
+                 'Written by <code>predict_slate.py</code> alongside the hitter '
+                 'props. A slate predicted before this tab existed will not '
+                 'have them.</span></div>')
+        else:
+            if "start_time_utc" in games_df:
+                games_df["start"] = pd.to_datetime(
+                    games_df["start_time_utc"], utc=True, errors="coerce"
+                ).dt.tz_convert("America/New_York")
+                games_df = games_df.sort_values("start", na_position="last")
 
-        # Who the model expects to do the scoring. exp_runs is p_run x
-        # expected_pa, written by predict_slate -- the same numbers that
-        # were summed to produce the team total above, so the three names
-        # under a card are literally the biggest terms in that card's score.
-        # An older slate file predates the column; the card still draws,
-        # just without the bottom half.
-        have_scorers = "exp_runs" in df.columns
+            # Who the model expects to do the scoring. exp_runs is p_run x
+            # expected_pa, written by predict_slate -- the same numbers that
+            # were summed to produce the team total above, so the three names
+            # under a card are literally the biggest terms in that card's score.
+            # An older slate file predates the column; the card still draws,
+            # just without the bottom half.
+            have_scorers = "exp_runs" in df.columns
 
-        def scorers(pk, team, n=3):
-            if not have_scorers:
-                return ""
-            side = df[(df["game_pk"] == pk) & (df["team"] == team)]
-            side = side.dropna(subset=["exp_runs"]).nlargest(n, "exp_runs")
-            if side.empty:
-                return ""
-            return " · ".join(
-                f'<b>{str(r["name"]).split()[-1] if pd.notna(r["name"]) else "?"}</b>'
-                f' {r["exp_runs"]:.2f}'
-                for _, r in side.iterrows())
+            def scorers(pk, team, n=3):
+                if not have_scorers:
+                    return ""
+                side = df[(df["game_pk"] == pk) & (df["team"] == team)]
+                side = side.dropna(subset=["exp_runs"]).nlargest(n, "exp_runs")
+                if side.empty:
+                    return ""
+                return " · ".join(
+                    f'<b>{str(r["name"]).split()[-1] if pd.notna(r["name"]) else "?"}</b>'
+                    f' {r["exp_runs"]:.2f}'
+                    for _, r in side.iterrows())
 
-        cards = ""
-        for r in games_df.to_dict("records"):
-            pk = int(r["game_pk"])
-            away, home = r.get("away_team", "?"), r.get("home_team", "?")
-            ap, hp = float(r.get("away_win_prob", 0.5)), float(r.get("home_win_prob", 0.5))
-            ar, hr_ = float(r.get("away_runs", 0)), float(r.get("home_runs", 0))
-            clock = fmt_clock(r.get("start")) if "start" in r else ""
+            cards = ""
+            for r in games_df.to_dict("records"):
+                pk = int(r["game_pk"])
+                away, home = r.get("away_team", "?"), r.get("home_team", "?")
+                ap, hp = float(r.get("away_win_prob", 0.5)), float(r.get("home_win_prob", 0.5))
+                ar, hr_ = float(r.get("away_runs", 0)), float(r.get("home_runs", 0))
+                clock = fmt_clock(r.get("start")) if "start" in r else ""
 
-            # A lineup the model could only partly fill scores low for a
-            # reason that has nothing to do with the teams. Say so on the
-            # card rather than letting it read as a projection.
-            thin = ""
-            missing = [t for t, k in ((away, "away_hitters"), (home, "home_hitters"))
-                       if pd.notna(r.get(k)) and int(r[k]) < 9]
-            if missing:
-                thin = (f'<div class="sp-thin">Lineup incomplete for '
-                        f'{" and ".join(missing)} — that side\'s runs are '
-                        f'low by roughly the missing share.</div>')
+                # A lineup the model could only partly fill scores low for a
+                # reason that has nothing to do with the teams. Say so on the
+                # card rather than letting it read as a projection.
+                thin = ""
+                missing = [t for t, k in ((away, "away_hitters"), (home, "home_hitters"))
+                           if pd.notna(r.get(k)) and int(r[k]) < 9]
+                if missing:
+                    thin = (f'<div class="sp-thin">Lineup incomplete for '
+                            f'{" and ".join(missing)} — that side\'s runs are '
+                            f'low by roughly the missing share.</div>')
 
-            body = ""
-            if have_scorers:
-                a_s, h_s = scorers(pk, away), scorers(pk, home)
-                if a_s or h_s:
-                    body = (f'<div class="sp-sc">Expected to score'
-                            f'<div class="who">{away} &nbsp;{a_s}</div>'
-                            f'<div class="who">{home} &nbsp;{h_s}</div></div>')
+                body = ""
+                if have_scorers:
+                    a_s, h_s = scorers(pk, away), scorers(pk, home)
+                    if a_s or h_s:
+                        body = (f'<div class="sp-sc">Expected to score'
+                                f'<div class="who">{away} &nbsp;{a_s}</div>'
+                                f'<div class="who">{home} &nbsp;{h_s}</div></div>')
 
-            cards += (
-                f'<div class="sp-gc">'
-                f'<div class="hd"><span>{away} at {home}</span>'
-                f'<span>{clock}</span></div>'
-                f'<div class="sd">'
-                f'<div><div class="tm">{away}</div>'
-                f'<div class="rn{"" if ar >= hr_ else " dim"}">{ar:.1f}</div></div>'
-                f'<div style="text-align:right"><div class="tm">{home}</div>'
-                f'<div class="rn{"" if hr_ >= ar else " dim"}">{hr_:.1f}</div></div>'
-                f'</div>'
-                f'<div class="sp-bar"><i class="a" style="width:{ap * 100:.1f}%"></i>'
-                f'<i class="h" style="width:{hp * 100:.1f}%"></i></div>'
-                f'<div class="sp-wp"><span>{away} <b>{ap:.0%}</b></span>'
-                # The flanks already carry the split the bar is showing, so
-                # the middle carries the other number people want off a
-                # game card: how many runs total.
-                f'<span style="color:var(--ink3)">{ar + hr_:.1f} total</span>'
-                f'<span><b>{hp:.0%}</b> {home}</span></div>'
-                f'{body}{thin}</div>')
-        html(f'<div class="sp-gl">{cards}</div>')
+                cards += (
+                    f'<div class="sp-gc">'
+                    f'<div class="hd"><span>{away} at {home}</span>'
+                    f'<span>{clock}</span></div>'
+                    f'<div class="sd">'
+                    f'<div><div class="tm">{away}</div>'
+                    f'<div class="rn{"" if ar >= hr_ else " dim"}">{ar:.1f}</div></div>'
+                    f'<div style="text-align:right"><div class="tm">{home}</div>'
+                    f'<div class="rn{"" if hr_ >= ar else " dim"}">{hr_:.1f}</div></div>'
+                    f'</div>'
+                    f'<div class="sp-bar"><i class="a" style="width:{ap * 100:.1f}%"></i>'
+                    f'<i class="h" style="width:{hp * 100:.1f}%"></i></div>'
+                    f'<div class="sp-wp"><span>{away} <b>{ap:.0%}</b></span>'
+                    # The flanks already carry the split the bar is showing, so
+                    # the middle carries the other number people want off a
+                    # game card: how many runs total.
+                    f'<span style="color:var(--ink3)">{ar + hr_:.1f} total</span>'
+                    f'<span><b>{hp:.0%}</b> {home}</span></div>'
+                    f'{body}{thin}</div>')
+            html(f'<div class="sp-gl">{cards}</div>')
 
-        totals = games_df["home_runs"] + games_df["away_runs"]
-        edge = games_df[["home_win_prob", "away_win_prob"]].max(axis=1)
-        html(f'<div class="sp-kpi">'
-             f'<div><span class="v">{len(games_df)}</span>'
-             f'<span class="k">Games projected</span></div>'
-             f'<div><span class="v">{totals.mean():.1f}</span>'
-             f'<span class="k">Runs per game, both sides</span></div>'
-             f'<div><span class="v">{edge.max():.0%}</span>'
-             f'<span class="k">Strongest lean on the slate</span></div>'
-             f'<div><span class="v">'
-             f'{int((edge > 0.60).sum())}</span>'
-             f'<span class="k">Games leaning past 60%</span></div></div>')
+            totals = games_df["home_runs"] + games_df["away_runs"]
+            edge = games_df[["home_win_prob", "away_win_prob"]].max(axis=1)
+            html(f'<div class="sp-kpi">'
+                 f'<div><span class="v">{len(games_df)}</span>'
+                 f'<span class="k">Games projected</span></div>'
+                 f'<div><span class="v">{totals.mean():.1f}</span>'
+                 f'<span class="k">Runs per game, both sides</span></div>'
+                 f'<div><span class="v">{edge.max():.0%}</span>'
+                 f'<span class="k">Strongest lean on the slate</span></div>'
+                 f'<div><span class="v">'
+                 f'{int((edge > 0.60).sum())}</span>'
+                 f'<span class="k">Games leaning past 60%</span></div></div>')
 
-        html('<div style="font-size:12px;color:var(--ink3);line-height:1.6">'
-             'A projected score is the <b style="color:var(--ink2)">average</b> '
-             'of how the game goes, not a prediction of the final. The win '
-             'probability is what matters, and it is much closer to even than '
-             'the run gap looks: a team projected a full run better still '
-             'loses close to four times in ten, because baseball scoring is '
-             'lumpy — one big inning swings a game and the model knows it. '
-             'The names are the model\'s biggest expected run scorers, in '
-             'runs, and they add up to the team total above them.<br>'
-             'The starting pitcher is in these numbers through each hitter\'s '
-             'matchup; there is no separate pitcher term.</div>')
+            html('<div style="font-size:12px;color:var(--ink3);line-height:1.6">'
+                 'A projected score is the <b style="color:var(--ink2)">average</b> '
+                 'of how the game goes, not a prediction of the final. The win '
+                 'probability is what matters, and it is much closer to even than '
+                 'the run gap looks: a team projected a full run better still '
+                 'loses close to four times in ten, because baseball scoring is '
+                 'lumpy — one big inning swings a game and the model knows it. '
+                 'The names are the model\'s biggest expected run scorers, in '
+                 'runs, and they add up to the team total above them.<br>'
+                 'The starting pitcher is in these numbers through each hitter\'s '
+                 'matchup; there is no separate pitcher term.</div>')
 
 
 # --------------------------------------------------- pitchers vs market

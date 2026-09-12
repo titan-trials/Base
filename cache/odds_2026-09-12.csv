@@ -1,0 +1,16 @@
+market,player,line,prob_over,hold,n_books,commence_time,home_team,away_team,game_date,fetched_at_utc
+pitcher_strikeouts,Zach Thornton,3.5,0.585022807906741,0.06493401081151284,3,2026-09-12T17:36:00Z,New York Yankees,New York Mets,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Tyler Phillips,3.5,0.541784417702891,0.0619905213998625,2,2026-09-12T20:11:00Z,Miami Marlins,Los Angeles Dodgers,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Randy Dobnak,3.5,0.5289256198347108,0.06140350877192979,3,2026-09-12T20:11:00Z,Boston Red Sox,Kansas City Royals,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Tyler Mahle,4.5,0.5203045685279188,0.06000968608286006,3,2026-09-12T23:16:00Z,Atlanta Braves,Philadelphia Phillies,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Clay Holmes,4.5,0.4199432509120389,0.058344058344058425,1,2026-09-12T18:21:00Z,Chicago Cubs,Pittsburgh Pirates,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Peter Lambert,4.5,0.4151739715962931,0.06344728315929893,2,2026-09-12T22:11:00Z,Tampa Bay Rays,Houston Astros,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Zach Thornton,4.5,0.4063816977724262,0.06066411238825031,1,2026-09-12T17:36:00Z,New York Yankees,New York Mets,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Ian Seymour,5.5,0.5614029600236967,0.06295096682764267,2,2026-09-12T22:11:00Z,Tampa Bay Rays,Houston Astros,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Paul Skenes,5.5,0.5020774472328402,0.06101216716628466,1,2026-09-12T18:21:00Z,Chicago Cubs,Pittsburgh Pirates,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Gerrit Cole,5.5,0.5010969067230411,0.06341719336768836,4,2026-09-12T17:36:00Z,New York Yankees,New York Mets,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Ranger Suarez,5.5,0.5,0.06103286384976525,3,2026-09-12T20:11:00Z,Boston Red Sox,Kansas City Royals,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Bryan Woo,5.5,0.4804680258911181,0.06355207431247611,2,2026-09-13T01:41:00Z,Athletics,Seattle Mariners,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Gage Jump,5.5,0.42323017148638337,0.06438087106691759,2,2026-09-13T01:41:00Z,Athletics,Seattle Mariners,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Jesus Luzardo,6.5,0.5543606364172068,0.06132030276899503,3,2026-09-12T23:16:00Z,Atlanta Braves,Philadelphia Phillies,2026-09-12,2026-09-12T03:40:18Z
+pitcher_strikeouts,Tyler Glasnow,7.5,0.4349783929828279,0.06191593770002135,2,2026-09-12T20:11:00Z,Miami Marlins,Los Angeles Dodgers,2026-09-12,2026-09-12T03:40:18Z

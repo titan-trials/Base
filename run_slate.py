@@ -10,7 +10,6 @@ WHY THIS EXISTS
 ---------------
 The five commands were being run in an order that cannot work:
 
-    odds_lines gamelines
     odds_lines
     compare_market        <- reads cache/pitchers_{date}.csv
     predict_slate         <- WRITES cache/pitchers_{date}.csv
@@ -55,8 +54,15 @@ import pandas as pd
 
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 
-# Player props are per event; game lines are per market for the slate.
-CREDITS_GAMELINES = 2
+# Game lines are no longer bought.
+#
+# Two credits a night for the moneyline and total, against a team model
+# that graded out at a coin flip on winners (home-win Brier 0.237-0.265
+# versus 0.25) and half a run worse than the market on totals. Paying to
+# benchmark a model nobody reads is the wrong two credits. The fetcher
+# stays in data/odds_lines -- `python -m data.odds_lines DATE gamelines`
+# still works by hand if the team model ever earns the check.
+CREDITS_GAMELINES = 0
 
 
 def _run(label: str, args: list, dry: bool) -> bool:
@@ -129,18 +135,17 @@ def main():
 
     if not args.no_odds:
         remaining = (clock[0] - clock[1]) if clock else "?"
-        print(f"\n  Odds cost this run: ~{remaining} credit(s) for player "
-              f"props + {CREDITS_GAMELINES} for game lines. "
-              f"Free tier is 500 a month.")
+        print(f"\n  Odds cost this run: ~{remaining} credit(s), all player "
+              f"props. Free tier is 500 a month.")
 
     # 1. Lineups. Free, one second, and the thing worth knowing before
     #    committing a prediction: projected slots and confirmed slots give
     #    materially different plate appearances.
-    _run("1/5  Lineups", ["check_lineups.py", game_date], args.dry_run)
+    _run("1/4  Lineups", ["check_lineups.py", game_date], args.dry_run)
 
     # 2. Predictions. Free. MUST come before compare_market, which reads
     #    the pitcher file this writes.
-    if not _run("2/5  Predictions", ["predict_slate.py", game_date],
+    if not _run("2/4  Predictions", ["predict_slate.py", game_date],
                 args.dry_run):
         print("\n  Stopping: predictions failed, so there is nothing for the "
               "market comparison to compare against. No credits were spent.")
@@ -154,20 +159,18 @@ def main():
     # 3 and 4. The only steps that cost anything. Game lines first: two
     #    credits for the whole slate, and if the key or the plan is wrong
     #    it fails here having spent two rather than fifteen.
-    _run(f"3/5  Game lines ({CREDITS_GAMELINES} credits)",
-         ["-m", "data.odds_lines", game_date, "gamelines"], args.dry_run)
-    _run("4/5  Strikeout props (1 credit per game not yet started)",
+    _run("3/4  Strikeout props (1 credit per game not yet started)",
          ["-m", "data.odds_lines", game_date], args.dry_run)
 
-    # 5. Free, local, and the step that was running too early.
-    _run("5/5  Model vs market", ["compare_market.py", game_date],
+    # 4. Free, local, and the step that was running too early.
+    _run("4/4  Model vs market", ["compare_market.py", game_date],
          args.dry_run)
 
     if not args.dry_run:
         print(f"\n{'=' * 72}\nWROTE\n{'=' * 72}")
         for name in (f"slate_{game_date}", f"pitchers_{game_date}",
                      f"teams_{game_date}", f"odds_{game_date}",
-                     f"gamelines_{game_date}", f"market_compare_{game_date}"):
+                     f"market_compare_{game_date}"):
             path = os.path.join(CACHE, f"{name}.csv")
             if os.path.exists(path):
                 stamp = pd.Timestamp(os.path.getmtime(path), unit="s",
