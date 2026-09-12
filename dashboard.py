@@ -1785,3 +1785,152 @@ with tab_res:
                  f'color:var(--ink3)">Based on {n_slates} '
                  f'slate{"" if n_slates == 1 else "s"}. Roughly ten are '
                  f'needed before these numbers stop moving around.</div>')
+
+    # ---- starting pitchers -------------------------------------------
+    #
+    # The pitcher props have never been on this page. They are the
+    # strongest part of the model -- pooled Brier skill around +0.09 on
+    # the 5.5 strikeout line against +0.01 to +0.03 for any hitter prop --
+    # and the only place to read them was the terminal after a score run.
+    #
+    # Separate table rather than more rows on the hitter one: the unit is
+    # a STARTER, about fifteen a night against 250 hitters, so an `n` in
+    # this table means something very different from an `n` above it.
+    prow = os.path.join(CACHE_DIR, "pitcher_scoring_log.csv")
+    plog = None
+    if os.path.exists(prow):
+        try:
+            plog = pd.read_csv(prow)
+        except Exception:
+            plog = None
+
+    if plog is not None and not plog.empty and "brier_skill" in plog.columns:
+        html('<div style="font-size:15px;font-weight:640;color:var(--ink);'
+             'margin-top:30px">Starting pitchers</div>'
+             '<div style="color:var(--ink3);font-size:12.5px;'
+             'margin-bottom:14px">One row per starter graded, not per '
+             'hitter — so these counts are much smaller than the ones '
+             'above and move around more.</div>')
+
+        # Rows written before the outs prop existed are all strikeouts.
+        if "prop" not in plog.columns:
+            plog["prop"] = "strikeouts"
+        plog["prop"] = plog["prop"].fillna("strikeouts")
+
+        # The per-batter rate the strikeout prop compounds was replaced on
+        # this date, and the old path scored -0.14 live against the new
+        # one's +0.09 backtest. Two different models must not be pooled,
+        # so the older rows are dropped from this table rather than
+        # averaged into it -- the terminal shows both splits.
+        K_PATH_CHANGED = "2026-09-05"
+        dates = pd.to_datetime(plog["game_date"], errors="coerce")
+        older = int((dates < pd.Timestamp(K_PATH_CHANGED)).sum())
+        plog = plog[dates >= pd.Timestamp(K_PATH_CHANGED)]
+
+    if plog is not None and not plog.empty:
+        def _ppool(g):
+            w = g["n"].to_numpy(dtype=float)
+            did = float((g["base_rate"] * g["n"]).sum() / w.sum())
+            brier = float((g["brier"] * g["n"]).sum() / w.sum())
+            ref = did * (1.0 - did)
+            se = (did * (1.0 - did) / w.sum()) ** 0.5 if w.sum() else float("nan")
+            said = float((g["mean_pred"] * g["n"]).sum() / w.sum())
+            return pd.Series({
+                "n": int(w.sum()), "slates": g["game_date"].nunique(),
+                "said": said, "did": did,
+                "skill": 1.0 - brier / ref if ref > 0 else float("nan"),
+                "sigma": (said - did) / se if se else float("nan")})
+
+        by_line = (plog.groupby(["prop", "line"], sort=False)
+                   [["n", "base_rate", "brier", "mean_pred", "game_date"]]
+                   .apply(_ppool).reset_index()
+                   .sort_values(["prop", "line"]))
+
+        starters = int(plog.groupby("game_date")["n"].max().sum())
+        n_pslates = plog["game_date"].nunique()
+        best = by_line["skill"].max()
+        html(f'<div class="sp-kpi">'
+             f'<div><span class="v">{n_pslates}</span>'
+             f'<span class="k">Slates scored</span></div>'
+             f'<div><span class="v">{starters:,}</span>'
+             f'<span class="k">Starters graded</span></div>'
+             f'<div><span class="v">{best * 100:+.1f}%</span>'
+             f'<span class="k">Best line</span></div></div>')
+
+        LABEL = {"strikeouts": "Strikeouts over", "outs": "Outs over"}
+        rows = ""
+        for r in by_line.itertuples():
+            extra = ""
+            if r.prop == "outs":
+                extra = f' <span style="color:var(--ink3)">({r.line / 3:.1f} inn)</span>'
+            rows += (
+                f'<tr><td style="font-weight:560">'
+                f'{LABEL.get(r.prop, r.prop)} {r.line:g}{extra}</td>'
+                f'<td style="color:var(--ink2)">{int(r.n):,}</td>'
+                f'<td>{pct(r.said)}</td><td>{pct(r.did)}</td>'
+                f'<td style="color:{"var(--ink2)" if abs(r.sigma) < 2 else "var(--warn)"}">'
+                f'{r.sigma:+.1f}σ</td>'
+                f'<td style="color:{skill_color(r.skill)};font-weight:560">'
+                f'{r.skill * 100:+.2f}%</td></tr>')
+        html('<table class="plain"><thead><tr><th>Prop</th>'
+             '<th>Graded</th><th>Model said</th><th>Actually happened</th>'
+             '<th>Miss</th><th>Edge</th></tr></thead><tbody>'
+             + rows + '</tbody></table>')
+
+        # The level check. Both props are built on the same projection of
+        # how long a starter lasts, so if that runs long BOTH run long --
+        # and a probability table cannot show it, because a model can be
+        # biased on the count and still land near 50% on a line.
+        pairs = [("Batters faced", "pred_bf", "actual_bf"),
+                 ("Strikeouts", "pred_k", "actual_k"),
+                 ("Outs recorded", "pred_outs", "actual_outs")]
+        cells = ""
+        for label, pc, ac in pairs:
+            if pc not in plog.columns or ac not in plog.columns:
+                continue
+            sub = plog.dropna(subset=[pc, ac])
+            # Nine innings is 27 outs. Anything past 30 is a parsing
+            # failure, not a pitcher -- rows written before the innings
+            # double-conversion was fixed carry 3.3e14 here, and one of
+            # them would make this whole row meaningless.
+            if ac == "actual_outs":
+                sub = sub[sub[ac] <= 30]
+            if sub.empty:
+                continue
+            w = sub["n"].to_numpy(dtype=float)
+            pred = float((sub[pc] * sub["n"]).sum() / w.sum())
+            act = float((sub[ac] * sub["n"]).sum() / w.sum())
+            gap = pred - act
+            colour = "var(--ink2)" if abs(gap) < 0.75 else "var(--warn)"
+            cells += (
+                f'<div style="display:flex;justify-content:space-between;'
+                f'gap:14px;padding:3px 0;font-size:12.5px">'
+                f'<span style="color:var(--ink3)">{label}</span>'
+                f'<span style="font-variant-numeric:tabular-nums">'
+                f'projected <b style="color:var(--ink)">{pred:.2f}</b> · '
+                f'actual <b style="color:var(--ink)">{act:.2f}</b> · '
+                f'<b style="color:{colour}">{gap:+.2f}</b></span></div>')
+        if cells:
+            html(f'<div style="margin-top:16px;border:1px solid var(--line);'
+                 f'border-radius:10px;padding:11px 14px;max-width:520px">'
+                 f'<div style="font-size:11px;color:var(--ink3);'
+                 f'letter-spacing:.06em;text-transform:uppercase;'
+                 f'margin-bottom:5px">Level check — per start</div>'
+                 f'{cells}</div>')
+
+        note = ""
+        if older:
+            note = (f' The {older} row(s) from before {K_PATH_CHANGED} are '
+                    f'left out: the strikeout prop compounded a different, '
+                    f'untested rate until then, and pooling two models '
+                    f'describes neither.')
+        html(f'<div style="margin-top:12px;font-size:12px;color:var(--ink3);'
+             f'line-height:1.55">Fifteen starters a night is a tenth of the '
+             f'hitter sample, so a single slate here is almost pure noise '
+             f'and even {n_pslates} is early.{note}<br>'
+             f'<b style="color:var(--ink2)">Level check</b> is the half a '
+             f'probability table cannot show: a model can sit near 50% on '
+             f'every line and still be projecting starters a full inning '
+             f'too deep. Both props are built on the same estimate of how '
+             f'long a starter lasts, so when that drifts they drift '
+             f'together.</div>')

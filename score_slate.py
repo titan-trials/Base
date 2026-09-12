@@ -58,7 +58,7 @@ from data.cache import cache_path
 from data.refresh import refresh_players
 from features.pa_table import build_pa_table, build_game_totals
 from data.batting_lines import get_batting_lines
-from data.pitching_lines import get_pitching_lines, _innings_to_float
+from data.pitching_lines import get_pitching_lines
 from compare_market import score_against_market
 from features.run_features import build_run_training_frame
 from model.hr_v4 import evaluate, bootstrap_brier_skill, reliability_by_quantile
@@ -350,13 +350,29 @@ def score_pitchers(game_date: str):
         print("  None of the projected starters started. Nothing to score.")
         return None
 
-    # Outs actually recorded. "6.2" innings is six and two thirds, which
-    # data/pitching_lines._innings_to_float already knows; times three it
-    # is the truth the outs prop is graded against. No extra fetch -- the
-    # boxscore line was already pulled for batters faced.
+    # Outs actually recorded. No extra fetch -- the boxscore line was
+    # already pulled for batters faced.
+    #
+    # innings_pitched in the cache is ALREADY a float in innings:
+    # data/pitching_lines applies _innings_to_float when it builds the
+    # file, so "6.2" was turned into 6.667 before it was ever written.
+    # Converting again read "4.333333333333333" as four innings and
+    # 333333333333333 outs, giving 3.3e14 outs for every pitcher who left
+    # mid-inning. Whole innings survived it untouched, so 24 of 28 rows on
+    # 2026-09-11 looked perfectly normal and only the four fractional ones
+    # were wrong -- which is exactly the kind of error that gets averaged
+    # into a summary and never seen.
     if "innings_pitched" in merged.columns:
         merged["outs_recorded"] = (
-            merged["innings_pitched"].map(_innings_to_float) * 3).round()
+            pd.to_numeric(merged["innings_pitched"], errors="coerce")
+            * 3).round()
+        # A start is nine innings at the very most. Anything past that is
+        # a parsing failure, not a pitcher, and it must not reach a log.
+        bad = merged["outs_recorded"] > 30
+        if bad.any():
+            print(f"  {int(bad.sum())} impossible outs figure(s) dropped "
+                  f"-- innings_pitched did not parse.")
+            merged.loc[bad, "outs_recorded"] = float("nan")
 
     merged[CLEAN_COL] = clean_mask(merged)
     n_clean = int(merged[CLEAN_COL].sum())
