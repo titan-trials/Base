@@ -227,13 +227,21 @@ def _outs_by_start(work: pd.DataFrame) -> pd.Series:
     return half.groupby(["pitcher", "game_pk"])["outs"].sum()
 
 
-def identify_starts(pa: pd.DataFrame) -> pd.DataFrame:
+def identify_appearances(pa: pd.DataFrame) -> pd.DataFrame:
     """
-    One row per (pitcher, game) for genuine starting appearances.
+    One row per (pitcher, game) for EVERY outing, relief included.
 
-    `pa` needs pitcher, game_pk, events, inning, game_date -- the columns
-    data/pitcher_data.pitcher_pa_table already produces -- plus game_type
-    when it is available.
+    Split out of identify_starts because relief outings turned out to
+    matter. A pitcher with no qualifying starts in the window is one of
+    three completely different people -- a debut, a veteran off a layoff,
+    and an active reliever getting a spot start -- and only the third
+    pitches every few days. Without appearances there is no way to tell
+    them apart, and all three were being handed the same 22.8-batter
+    starter prior.
+
+    Sean Newcomb on 2026-09-12: 55 appearances in twelve months, four of
+    them starts, 6.3 batters faced on average, never more than 12. The
+    model projected him for 22.4.
     """
     pa = regular_season_only(pa)
     work = pa[pa["events"].notna() & ~pa["events"].isin(NON_PA_EVENTS)].copy()
@@ -245,17 +253,30 @@ def identify_starts(pa: pd.DataFrame) -> pd.DataFrame:
                   last_inning=("inning", "max"),
                   game_date=("game_date", "first"))
              .reset_index())
-    starts = g[g["first_inning"] == 1].copy()
     outs = _outs_by_start(work)
     if len(outs):
-        starts["outs"] = (starts.set_index(["pitcher", "game_pk"]).index
-                          .map(outs).astype(float))
+        g["outs"] = (g.set_index(["pitcher", "game_pk"]).index
+                     .map(outs).astype(float))
     else:
-        starts["outs"] = np.nan
-    starts["year"] = starts["game_date"].dt.year
-    opener = ((starts["bf"] < OPENER_MAX_BF)
-              & (starts["last_inning"] < OPENER_MAX_INNING))
-    starts["is_opener"] = opener
+        g["outs"] = np.nan
+    g["is_start"] = g["first_inning"] == 1
+    g["is_opener"] = (g["is_start"]
+                      & (g["bf"] < OPENER_MAX_BF)
+                      & (g["last_inning"] < OPENER_MAX_INNING))
+    g["year"] = g["game_date"].dt.year
+    return g
+
+
+def identify_starts(pa: pd.DataFrame) -> pd.DataFrame:
+    """
+    One row per (pitcher, game) for genuine starting appearances.
+
+    `pa` needs pitcher, game_pk, events, inning, game_date -- the columns
+    data/pitcher_data.pitcher_pa_table already produces -- plus game_type
+    when it is available.
+    """
+    g = identify_appearances(pa)
+    starts = g[g["is_start"]].copy()
     return starts
 
 
@@ -325,7 +346,8 @@ class WorkloadModel:
 
     @classmethod
     def fit(cls, starts: pd.DataFrame, as_of=None,
-            trailing_months: int = TRAILING_MONTHS, verbose: bool = True):
+            trailing_months: int = TRAILING_MONTHS, verbose: bool = True,
+            appearances: pd.DataFrame = None):
         """
         Fit both halves from ONE window.
 
@@ -484,17 +506,109 @@ class WorkloadModel:
             print("    Outs recorded: too few starts carry an outs figure "
                   "to fit; the outs prop will be skipped.")
 
+        # ---- relief arms and openers -------------------------------
+        #
+        # `usable` drops openers, so a pitcher whose only starts were
+        # opener-length has NO rows here and falls through to the
+        # new-pitcher prior -- the same one a genuine debut gets. That is
+        # the single worst projection this model makes.
+        #
+        # Sean Newcomb, 2026-09-12: four starting appearances in twelve
+        # months, every one classified an opener (5, 7, 8, 9 batters), 55
+        # appearances in all at 6.3 batters. Projected 22.4.
+        #
+        # His own opener starts are far better evidence about him than the
+        # league is, so they are used, shrunk toward the OPENER population
+        # rather than the starter one. Same arithmetic as everywhere else,
+        # pointed at the right reference group.
+        openers = starts[starts["is_opener"]].copy()
+        if as_of is not None:
+            openers = openers[(openers["game_date"] >= cutoff)
+                              & (openers["game_date"] < as_of)]
+        model.opener_mean_bf = (float(openers["bf"].mean())
+                                if len(openers) >= 30 else float("nan"))
+        model.opener_k_rate = (float(openers["k"].sum() / openers["bf"].sum())
+                               if len(openers) >= 30
+                               and openers["bf"].sum() > 0 else float("nan"))
+        o_outs = openers["outs"].dropna() if "outs" in openers else pd.Series(dtype=float)
+        model.opener_mean_outs = (float(o_outs.mean())
+                                  if len(o_outs) >= 30 else float("nan"))
+
+        has_real_start = set(n.index)      # pitchers with a non-opener start
+        model.opener_only = {}
+        if len(openers) and np.isfinite(model.opener_mean_bf):
+            by_o = openers.groupby("pitcher")
+            for pid, grp in by_o:
+                if pid in has_real_start:
+                    continue               # a real starter who also opened
+                m = len(grp)
+                entry = {
+                    "n": m,
+                    "bf": float((grp["bf"].mean() * m
+                                 + model.opener_mean_bf * BF_PRIOR_STARTS)
+                                / (m + BF_PRIOR_STARTS)),
+                }
+                if np.isfinite(model.opener_k_rate) and grp["bf"].sum() > 0:
+                    entry["k_rate"] = float(
+                        (grp["k"].sum() + K_PRIOR_BF * model.opener_k_rate)
+                        / (grp["bf"].sum() + K_PRIOR_BF))
+                go = grp["outs"].dropna()
+                if len(go) and np.isfinite(model.opener_mean_outs):
+                    entry["outs"] = float(
+                        (go.mean() * len(go)
+                         + model.opener_mean_outs * OUTS_PRIOR_STARTS)
+                        / (len(go) + OUTS_PRIOR_STARTS))
+                model.opener_only[pid] = entry
+
+        # Appearance history, for telling the three zeros apart. Not a
+        # model input -- `days_since_last_appearance` next to a
+        # `days_since_last_start` of 507 is what says "reliever", not
+        # "coming back from something".
+        model.appearance_counts, model.last_appearance = {}, {}
+        model.relief_bf = {}
+        if appearances is not None and len(appearances):
+            app = appearances.copy()
+            app["game_date"] = pd.to_datetime(app["game_date"])
+            if as_of is not None:
+                app = app[(app["game_date"] >= cutoff)
+                          & (app["game_date"] < as_of)]
+            if len(app):
+                model.appearance_counts = app.groupby("pitcher").size().to_dict()
+                model.last_appearance = (app.groupby("pitcher")["game_date"]
+                                         .max().to_dict())
+                model.relief_bf = (app[~app["is_start"]].groupby("pitcher")["bf"]
+                                   .mean().to_dict())
+
+        if verbose and model.opener_only:
+            ex = len(model.opener_only)
+            print(f"    {ex} pitcher(s) have only opener-length starts in "
+                  f"the window; estimated from those "
+                  f"(opener league mean {model.opener_mean_bf:.1f} batters) "
+                  f"rather than from the {league_mean:.1f}-batter starter "
+                  f"prior.")
+
         model.career_start_counts = career_starts.to_dict()
         model.last_start_dates = (career.groupby("pitcher")["game_date"]
                                   .max().to_dict())
         return model
 
+    def _opener_entry(self, pitcher_id):
+        return getattr(self, "opener_only", {}).get(pitcher_id)
+
     def expected_bf(self, pitcher_id) -> float:
+        # His own opener starts beat the starter prior whenever he has
+        # them, and he only lands here if he has NO real start to use.
+        entry = self._opener_entry(pitcher_id)
+        if entry and "bf" in entry:
+            return float(entry["bf"])
         return float(self.pitcher_means.get(pitcher_id, self.new_pitcher_mean))
 
     def k_rate(self, pitcher_id) -> float:
         """Shrunk strikeouts per batter faced for this pitcher. A pitcher
         never seen gets the new-pitcher rate, not the league's."""
+        entry = self._opener_entry(pitcher_id)
+        if entry and "k_rate" in entry:
+            return float(entry["k_rate"])
         return float(self.pitcher_k_rates.get(
             pitcher_id, getattr(self, "new_pitcher_k", self.league_k_per_bf)))
 
@@ -504,6 +618,33 @@ class WorkloadModel:
     def career_starts(self, pitcher_id) -> int:
         """Every non-opener start in the cache before tonight."""
         return int(getattr(self, "career_start_counts", {}).get(pitcher_id, 0))
+
+    def appearances_seen(self, pitcher_id) -> int:
+        """Every outing in the window, relief included."""
+        return int(getattr(self, "appearance_counts", {}).get(pitcher_id, 0))
+
+    def days_since_last_appearance(self, pitcher_id, as_of) -> float:
+        """
+        Days since he last PITCHED, which is what "rest" means.
+
+        The companion to days_since_last_start, and the pair is the point:
+        507 days since a start with 3 days since an appearance is a
+        reliever; 464 and 464 is a man coming back from surgery.
+        """
+        last = getattr(self, "last_appearance", {}).get(pitcher_id)
+        if last is None or pd.isna(last):
+            return float("nan")
+        return float((pd.Timestamp(as_of) - pd.Timestamp(last)).days)
+
+    def role(self, pitcher_id) -> str:
+        """starter | opener | reliever | unknown -- display only."""
+        if pitcher_id in getattr(self, "pitcher_starts", {}):
+            return "starter"
+        if self._opener_entry(pitcher_id):
+            return "opener"
+        if self.appearances_seen(pitcher_id) >= 10:
+            return "reliever"
+        return "unknown"
 
     def days_since_last_start(self, pitcher_id, as_of) -> float:
         """NaN when he has never started; else days since his last one."""
@@ -516,6 +657,9 @@ class WorkloadModel:
         """Shrunk outs recorded. NaN when the outs half was not fitted."""
         if not _outs_ok(self):
             return float("nan")
+        entry = self._opener_entry(pitcher_id)
+        if entry and "outs" in entry:
+            return float(entry["outs"])
         return float(getattr(self, "pitcher_outs", {}).get(
             pitcher_id, getattr(self, "new_pitcher_outs",
                                 self.outs_league_mean)))

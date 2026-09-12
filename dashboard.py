@@ -888,8 +888,19 @@ with tab_pitch:
             "Team": pit["team"],
             "Opp": pit["opponent"],
             "Starts": pd.to_numeric(pit.get("starts_seen"), errors="coerce"),
-            "Rest": pd.to_numeric(pit.get("days_since_last_start"),
-                                  errors="coerce"),
+            # Days since he last PITCHED, not since he last started.
+            #
+            # Started life as days_since_last_start and was wrong for the
+            # case it most needed to be right about: Sean Newcomb read 507
+            # days on 2026-09-12 having pitched three days earlier. He had
+            # not STARTED in 507 days -- he is a reliever -- and the column
+            # said "coming back from something" about a man working every
+            # third day. Falls back to the old field for slates predicted
+            # before appearances were exported.
+            "Rest": pd.to_numeric(
+                pit.get("days_since_last_appearance",
+                        pit.get("days_since_last_start")), errors="coerce"),
+            "Role": pit.get("role"),
             "BF": pd.to_numeric(pit["expected_bf"], errors="coerce"),
             "K": pd.to_numeric(pit["expected_k"], errors="coerce"),
         })
@@ -949,6 +960,11 @@ with tab_pitch:
             pit_styled = pit_styled.apply(pit_thin_fill, subset=["Starts"])
         if "Rest" in pit_view:
             pit_styled = pit_styled.apply(pit_rest_fill, subset=["Rest"])
+        if "Role" in pit_view:
+            pit_styled = pit_styled.apply(
+                lambda col: [f"color:{_css_var('warn')}"
+                             if v in ("opener", "reliever", "unknown") else ""
+                             for v in col], subset=["Role"])
         pit_fmt = {lab: "{:.1%}" for lab in PIT_PROPS}
         pit_fmt.update({"BF": "{:.1f}", "K": "{:.1f}", "Starts": "{:.0f}",
                         "Rest": "{:.0f}"})
@@ -970,11 +986,21 @@ with tab_pitch:
                      f"spot', not as a read on the man."),
             "Rest": st.column_config.Column(
                 width=58,
-                help="Days since his last start. Four to six is a normal "
-                     "turn in the rotation. Amber past 30 means he is "
-                     "coming back from something the model cannot see — "
-                     "and a pitcher on a rehab leash goes shorter than "
-                     "any prior expects."),
+                help="Days since he last pitched, in any role. Four to six "
+                     "is a normal turn in the rotation. Amber past 30 means "
+                     "he is coming back from something the model cannot "
+                     "see — and a pitcher on a rehab leash goes shorter "
+                     "than any prior expects."),
+            "Role": st.column_config.Column(
+                width=72,
+                help="How the model has him. 'starter' has real starts in "
+                     "the last 12 months. 'opener' has only opener-length "
+                     "ones, and is projected from those rather than from "
+                     "the starter prior — Sean Newcomb averages 7 batters "
+                     "when he starts, against a league prior of 22.5. "
+                     "'reliever' pitches regularly but has not started. "
+                     "'unknown' is a debut or a long layoff, and gets the "
+                     "new-pitcher prior."),
             "BF": st.column_config.Column(
                 width=58,
                 help="Batters he is projected to face. Everything to the "

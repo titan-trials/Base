@@ -71,7 +71,8 @@ from features.rate_features import (
 )
 from features.form_features import add_form_deviation
 from features.pitcher_workload import (
-    identify_starts, WorkloadModel, k_count_distribution, prob_over,
+    identify_starts, identify_appearances, WorkloadModel,
+    k_count_distribution, prob_over,
     per_batter_k_probs, starter_exposure_by_slot,
 )
 from features.rbi_features import (
@@ -137,8 +138,14 @@ def fit_workload(starters, game_date, verbose=True):
             print("  No cached pitcher history -- no workload model.")
         return None
     try:
-        return WorkloadModel.fit(identify_starts(history),
-                                 as_of=pd.Timestamp(game_date), verbose=verbose)
+        # Appearances as well as starts. A pitcher with no qualifying
+        # start is a debut, a veteran off a layoff, or an active reliever
+        # getting a spot start -- and only the appearance history tells
+        # them apart. See identify_appearances.
+        appearances = identify_appearances(history)
+        return WorkloadModel.fit(appearances[appearances["is_start"]].copy(),
+                                 as_of=pd.Timestamp(game_date),
+                                 verbose=verbose, appearances=appearances)
     except ValueError as exc:
         if verbose:
             print(f"  Could not fit the workload model: {exc}")
@@ -252,6 +259,13 @@ def build_pitcher_props(frame, starters, game_date, workload, pa):
             "career_starts": workload.career_starts(pid),
             "days_since_last_start": workload.days_since_last_start(
                 pid, game_date),
+            # Appearances, not just starts. 507 days since a start with 3
+            # days since an appearance is a reliever; 464 and 464 is a man
+            # coming back from surgery. Same number, opposite meaning.
+            "appearances_seen": workload.appearances_seen(pid),
+            "days_since_last_appearance":
+                workload.days_since_last_appearance(pid, game_date),
+            "role": workload.role(pid),
             "k_rate": workload.k_rate(pid),
             "expected_k": expected,
             # Outs recorded. Fitted in the same window as batters faced
