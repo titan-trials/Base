@@ -96,9 +96,18 @@ ORDINAL = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "5th",
 
 CSS = """
 <style>
+/* Google Fonts by @import rather than a <link> tag: Streamlit's markdown
+   renderer does not reliably pass a bare <link> through, and a silently
+   dropped font falls back without saying so. Fraunces carries the date and
+   the display figures; Archivo does everything operational. */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Archivo:wght@400;500;600;700&display=swap');
 :root{
  --bg:#121212; --card:#232322; --card2:#2b2b29; --line:#383734;
- --ink:#fff; --ink2:#c3c2b7; --ink3:#8a8880; --accent:#3987e5;
+ --ink:#fff; --ink2:#c3c2b7; --ink3:#8a8880;
+ /* Warmed from #3987e5. The neutrals above lean warm on purpose and the
+    old blue was the one colour on the page arguing with them. Still
+    nowhere near the b1-b4 band scale, which has to stay semantic. */
+ --accent:#7d93d8;
  --b1:#d03b3b; --b2:#fab219; --b3:#ffed29; --b4:#34d399;
  --b1bg:#2b1414; --b2bg:#31260a; --b3bg:#454011; --b4bg:#103831;
  --b1ink:#ff8a8a; --b2ink:#ffd679; --b3ink:#fff389; --b4ink:#6ee6c4;
@@ -269,6 +278,28 @@ table.sp tr.team .tn{font-weight:660;font-size:15px;color:var(--ink)}
 .sp-sc .who{color:var(--ink2)}
 .sp-sc .who b{color:var(--ink);font-weight:560}
 .sp-thin{color:var(--b2ink);font-size:11.5px;margin-top:7px}
+
+/* The team block inside a game's drill-down.
+   Deliberately NOT the old .sp-gc card: that card led with a win-
+   probability bar, and the win probability was measured to have no
+   skill (home-win Brier 0.237-0.265 against 0.25 for a coin flip,
+   because the split only ever spanned 45-57%). Same numbers behind it,
+   but laid out so the thing in the biggest type is the thing that
+   holds up -- projected runs -- and there is no winner anywhere. */
+.sp-tb{background:var(--card);border:1px solid var(--line);border-radius:12px;
+ padding:14px 16px 13px;margin:6px 0 16px}
+.sp-tb .sd{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap}
+.sp-tb .sd>div{display:flex;align-items:baseline;gap:8px}
+.sp-tb .tm{font-size:14.5px;font-weight:640;color:var(--ink2);
+ letter-spacing:.01em}
+.sp-tb .rn{font-family:"Fraunces",Georgia,serif;font-size:27px;
+ font-weight:600;color:var(--ink);line-height:1}
+.sp-tb .at{font-size:11.5px;color:var(--ink3);font-style:italic;
+ padding-bottom:3px}
+.sp-tb .tot{margin-left:auto;font-size:12px;color:var(--ink3);
+ padding-bottom:4px}
+.sp-tb .tot b{font-family:"Fraunces",Georgia,serif;font-size:15px;
+ font-weight:600;color:var(--ink2)}
 table.plain{width:100%;border-collapse:collapse;font-size:13px}
 table.plain th{text-align:left;color:var(--ink3);font-size:11px;letter-spacing:.06em;
  text-transform:uppercase;padding:0 10px 8px;border-bottom:1px solid var(--line)}
@@ -285,6 +316,90 @@ div[data-testid="stHorizontalBlock"]{gap:7px;margin-bottom:6px}
 .stTabs [data-baseweb="tab-list"]{gap:4px;border-bottom:1px solid var(--line)}
 .stTabs [data-baseweb="tab"]{color:var(--ink3);font-size:13.5px;font-weight:540}
 .stTabs [aria-selected="true"]{color:var(--ink)!important}
+
+/* ==================================================== slate page v2 ===
+   The front page used to be a ranked list of twenty hitters, which
+   answers "who is highest" and looks identical every night. It now opens
+   with what is true about TONIGHT and puts the fifteen games -- which the
+   old page never mentioned once -- at the centre. */
+.sp-display{font-family:"Fraunces","Iowan Old Style",Georgia,serif;
+ font-optical-sizing:auto;font-weight:600;letter-spacing:-.02em;color:var(--ink)}
+.sp-summary{margin:9px 0 0;font-size:15px;color:var(--ink2);max-width:62ch;
+ line-height:1.55}
+.sp-summary b{color:var(--ink);font-weight:600}
+.sp-health{font-size:12px;color:var(--ink2);line-height:1.6;text-align:right}
+.sp-health .k{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+ color:var(--ink3);font-weight:600;display:block;margin-bottom:4px}
+.sp-health b{color:var(--ink);font-variant-numeric:tabular-nums}
+
+/* Findings. Drawn from a pool of checks -- see slate_findings(). */
+.sp-read{display:grid;grid-template-columns:repeat(auto-fit,minmax(252px,1fr));
+ gap:12px;margin:20px 0 30px}
+.sp-find{background:var(--card);border:1px solid var(--line);border-radius:13px;
+ padding:14px 16px 15px;display:flex;flex-direction:column}
+.sp-find .kind{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;
+ font-weight:700}
+.sp-find .fig{font-family:"Fraunces",Georgia,serif;font-size:31px;font-weight:600;
+ letter-spacing:-.03em;color:var(--ink);line-height:1.05;margin:8px 0 1px;
+ font-variant-numeric:tabular-nums}
+/* Every figure says what it counts. Without this the reader infers the unit
+   from the sentence, and a bare "18.0%" beside a pitcher's name reads as
+   easily as his chance of something as it does his rate. */
+.sp-find .unit{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
+ color:var(--ink3);font-weight:600;margin-bottom:7px}
+.sp-find .txt{font-size:12.5px;color:var(--ink3);line-height:1.55}
+.sp-find .txt b{color:var(--ink2);font-weight:600}
+
+/* The games list. Each row is a link that sets ?game=<pk>, which is how a
+   drill-down is done in Streamlit without fighting the tab model -- there
+   is no API to switch tabs, so the detail opens in place instead. */
+.sp-games{border-top:1px solid var(--line);margin-top:4px}
+a.sp-g{display:grid;grid-template-columns:64px 116px minmax(0,1.5fr) minmax(0,1.15fr) 62px;
+ gap:0 16px;align-items:center;padding:10px 2px;border-bottom:1px solid var(--line);
+ text-decoration:none;color:inherit;transition:background .12s ease}
+a.sp-g:hover{background:rgba(255,255,255,.03)}
+a.sp-g.on{background:rgba(125,147,216,.09);box-shadow:inset 2px 0 0 var(--accent)}
+a.sp-g .t{font-size:12.5px;color:var(--ink3);font-variant-numeric:tabular-nums}
+a.sp-g .m{font-size:15px;color:var(--ink);white-space:nowrap}
+a.sp-g .m i{color:var(--ink3);font-size:12.5px;font-style:normal;margin:0 4px}
+a.sp-g .p{font-size:12.5px;color:var(--ink3);min-width:0;overflow:hidden;
+ text-overflow:ellipsis;white-space:nowrap}
+a.sp-g .p b{color:var(--ink2);font-weight:500}
+a.sp-g .b{font-size:12.5px;color:var(--ink2);min-width:0;overflow:hidden;
+ text-overflow:ellipsis;white-space:nowrap}
+a.sp-g .b i{color:var(--ink3);font-style:normal}
+a.sp-g .v{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink);
+ font-size:14px;font-weight:500}
+.sp-dot{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:7px;
+ vertical-align:1.5px}
+.sp-dot.ok{background:var(--b4)}
+.sp-dot.wait{background:var(--b2)}
+@media (max-width:900px){
+ a.sp-g{grid-template-columns:58px minmax(0,1fr) 56px;row-gap:3px}
+ a.sp-g .p{grid-column:2 / -1;order:4}
+ a.sp-g .b{grid-column:2 / -1;order:5}
+}
+
+/* Leaderboard, demoted to a panel. The median tick was a 1px hairline at
+   80% opacity on a 6px bar -- invisible exactly where it matters. */
+.sp-lb{border-top:1px solid var(--line)}
+.sp-lb .r{display:grid;grid-template-columns:24px minmax(0,1fr) 128px 54px;
+ gap:0 12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+.sp-lb .n{color:var(--ink3);font-size:12.5px;text-align:right;
+ font-variant-numeric:tabular-nums}
+.sp-lb .w{color:var(--ink);font-size:13.5px;min-width:0;overflow:hidden;
+ text-overflow:ellipsis;white-space:nowrap}
+.sp-lb .w i{color:var(--ink3);font-style:normal;font-size:12.5px;margin-left:5px}
+.sp-lb .v{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink);
+ font-size:13.5px}
+.sp-tw{position:relative}
+.sp-med{position:absolute;top:-6px;bottom:-6px;width:2px;background:var(--ink);
+ border-radius:1px;box-shadow:0 0 0 2px var(--bg)}
+.sp-watch{border-top:1px solid var(--line)}
+.sp-w{padding:10px 0;border-bottom:1px solid var(--line)}
+.sp-w .t{font-size:13.5px;color:var(--ink);font-weight:500}
+.sp-w .d{font-size:12.5px;color:var(--ink3);margin-top:2px;line-height:1.5}
+.sp-w .d b{color:var(--ink2);font-weight:600;font-variant-numeric:tabular-nums}
 </style>
 """
 
@@ -617,6 +732,228 @@ def when_label(date_string):
     return f"in {delta} days", "future"
 
 
+# Hoisted above the tabs. This is a flat script -- every `with tab_x:`
+# block shares one namespace and runs top to bottom -- so a constant used
+# by the FIRST tab cannot be defined next to the fifth. The drill-down on
+# the Slate page needs these labels and died with NameError until they
+# moved up here. Same shape of bug as the `cuts`/`k_cuts` collision.
+BASE_LABELS = {"name": "Hitter", "team": "Team", "opponent": "Opp",
+               "lineup_slot": "Slot", "expected_pa": "PA",
+               # Sortable here, which the chips on the Slate tab are not --
+               # this is the view for "show me everyone running hot".
+               "form_z": "Form"}
+
+# Hover text for the prop columns. "TB 1.5" is unreadable to anyone who has
+# not been staring at this for a week, and the header itself has no room to
+# say more -- that is the whole reason the columns fit now.
+PROP_HELP = {
+    "prob_hr":            "Chance he hits at least one home run",
+    "prob_tb_over_1.5":   "Chance of 2+ total bases — a double, or two singles",
+    "prob_tb_over_2.5":   "Chance of 3+ total bases",
+    "prob_tb_over_3.5":   "Chance of 4+ total bases",
+    "prob_hit":           "Chance of at least one hit",
+    "prob_hits_over_1.5": "Chance of 2+ hits",
+    "prob_hits_over_2.5": "Chance of 3+ hits",
+    "prob_hrr_over_0.5":  "Chance of at least one hit, run scored or RBI. "
+                          "Walks do not count.",
+    "prob_hrr_over_1.5":  "Chance of 2+ hits, runs and RBI combined",
+    "prob_hrr_over_2.5":  "Chance of 3+ hits, runs and RBI combined",
+    "prob_hrr_over_3.5":  "Chance of 4+ hits, runs and RBI combined",
+    "prob_walk":          "Chance he draws at least one walk",
+}
+
+# --------------------------------------------------------------- slate v2
+WORDS = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six",
+         7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten", 11: "Eleven",
+         12: "Twelve", 13: "Thirteen", 14: "Fourteen", 15: "Fifteen",
+         16: "Sixteen"}
+
+
+def _word(n, cap=False):
+    w = WORDS.get(int(n), str(int(n)))
+    return w if cap else w.lower()
+
+
+def slate_summary(frame) -> str:
+    """
+    The line under the date, in the words a person would use.
+
+    A template with branches, not prose someone typed once. The branches
+    are the work: a sentence that reads well at fifteen games has to still
+    read well at two, and at "every lineup is posted" as well as "none is".
+    Nothing here is generated by a model -- a template cannot invent a
+    first-pitch time, which is the whole argument for using one.
+    """
+    n_games = frame["game_pk"].nunique()
+    bits = [f"{_word(n_games, cap=True)} game{'' if n_games == 1 else 's'}"]
+    if "start" in frame.columns and frame["start"].notna().any():
+        first, last = frame["start"].min(), frame["start"].max()
+        part = "morning" if first.hour < 12 else "afternoon" if first.hour < 17 \
+            else "evening"
+        if n_games == 1:
+            bits.append(f"first pitch {fmt_clock(first)}")
+        else:
+            venue = ""
+            tail = frame[frame["start"] == last]
+            if "venue_name" in tail.columns and len(tail):
+                venue = f" in {tail['venue_name'].iloc[0]}"
+            bits.append(f"running {fmt_clock(first)} this {part} through a "
+                        f"{fmt_clock(last)} finish{venue}")
+    line = ", ".join(bits) + ". "
+
+    if "lineup_status" in frame.columns:
+        by_game = frame.groupby("game_pk")["lineup_status"].apply(
+            lambda c: (c == "confirmed").all())
+        conf = int(by_game.sum())
+        if conf == n_games:
+            line += "Every lineup is posted."
+        elif conf == 0:
+            line += ("No lineups are posted yet, so every batting slot below "
+                     "is the model's guess.")
+        else:
+            line += (f"Lineups are in for {_word(conf)} — the rest are still "
+                     f"projected, so slots below the top of the order can move.")
+    return line
+
+
+def slate_findings(frame, pitchers, prop, prop_label, limit=4):
+    """
+    The card pool. Every entry is a check; the ones that fire get a card.
+
+    This is the difference between a page that regenerates and a page that
+    was written once. A market disagreement needs odds captured that day; a
+    hot bat needs one to exist. Rather than leave a blank card, each check
+    reports whether it fired, and the highest-priority hits are shown.
+
+    Priority is lowest-first. The three or four that survive are the cards.
+    """
+    out = []
+
+    def add(pri, kind, tone, fig, unit, txt):
+        out.append(dict(pri=pri, kind=kind, tone=tone, fig=fig,
+                        unit=unit, txt=txt))
+
+    # 1. Always fires: the top of the board for the selected prop.
+    if len(frame):
+        b = frame.nlargest(1, prop).iloc[0]
+        also = ""
+        if "prob_hr" in frame.columns and prop != "prob_hr":
+            if frame.nlargest(1, "prob_hr").iloc[0]["name"] == b["name"]:
+                also = (f" He owns the slate's best home-run number too, at "
+                        f"{pct(b['prob_hr'])} — the only hitter tonight "
+                        f"leading both.")
+        add(0, "Strongest on the board", "var(--accent)", pct(b[prop]),
+            prop_label,
+            f"<b>{b['name']}</b> against {b.get('opposing_pitcher', '—')}."
+            + also)
+
+    # 2 and 3. The two ends of tonight's pitching. Showing only the soft
+    #    arm tells a hitter where to look and never where to avoid.
+    if pitchers is not None and len(pitchers) >= 2 \
+            and {"expected_k", "expected_bf"}.issubset(pitchers.columns):
+        pit = pitchers.dropna(subset=["expected_k", "expected_bf"]).copy()
+        pit = pit[pit["expected_bf"] > 0]
+        if len(pit) >= 2:
+            pit["kr"] = pit["expected_k"] / pit["expected_bf"]
+            lg = float(pit["kr"].mean())
+            hi, lo = pit.nlargest(1, "kr").iloc[0], pit.nsmallest(1, "kr").iloc[0]
+            add(1, "Softest arm", "var(--b2)", f"{lo['kr']:.1%}",
+                f"of batters struck out · slate {lg:.0%}",
+                f"<b>{lo['pitcher']}</b> misses fewer bats than any starter "
+                f"tonight, so <b>{lo.get('opponent', 'the')}</b> hitters facing "
+                f"him put the ball in play more than anyone on the board. Good "
+                f"for them, not for him.")
+            add(2, "Strongest arm", "var(--b1ink)", f"{hi['kr']:.1%}",
+                f"of batters struck out · slate {lg:.0%}",
+                f"<b>{hi['pitcher']}</b> misses more bats than any starter "
+                f"tonight — <b>{hi['expected_k']:.1f}</b> strikeouts over "
+                f"{hi['expected_bf']:.0f} batters. The worst spot on the board "
+                f"for a hitter.")
+
+    # 4. Fires whenever anything is still projected. On a fully confirmed
+    #    slate it says so instead of hiding, which is the better message.
+    if "lineup_status" in frame.columns:
+        by_game = frame.groupby("game_pk")["lineup_status"].apply(
+            lambda c: (c == "confirmed").all())
+        n_games, waiting = len(by_game), int((~by_game).sum())
+        if waiting:
+            add(3, "Trust this less", "var(--b4)", f"{waiting} of {n_games}",
+                "lineups not posted",
+                "Batting slots in those games are the model's guess. Slot "
+                "drives plate appearances and plate appearances drive every "
+                "number below — re-run once they post.")
+
+    # 5. Form marker, when one lands near the top. Often it does not: on
+    #    2026-09-12 all ten of the top ten were Normal.
+    if "form_state" in frame.columns and len(frame) >= 10:
+        top = frame.nlargest(10, prop)
+        for state, tone, verb in (("Hot", "var(--b4)", "running hot"),
+                                  ("Cold", "var(--b1ink)", "running cold")):
+            hit = top[top["form_state"] == state]
+            if len(hit):
+                who = hit.iloc[0]
+                add(4 if state == "Hot" else 5, f"{state} bat near the top",
+                    tone, f"#{int(top.reset_index().index[top.reset_index()['name'] == who['name']][0]) + 1}",
+                    "on the board",
+                    f"<b>{who['name']}</b> is {verb} against his own baseline. "
+                    f"The model does not use the marker — it is tracked to find "
+                    f"out whether it predicts anything.")
+                break
+
+    # 6. A probable who is not a starter. Needs the role column, which
+    #    slates predicted before 2026-09-12 do not carry.
+    if pitchers is not None and "role" in (pitchers.columns if pitchers is not None else []):
+        odd = pitchers[pitchers["role"].isin(["opener", "reliever"])]
+        if len(odd):
+            o = odd.iloc[0]
+            add(6, "Not really a starter", "var(--b2)",
+                f"{o['expected_bf']:.0f}", "batters faced",
+                f"<b>{o['pitcher']}</b> is listed as starting but the model has "
+                f"him as {'an opener' if o['role'] == 'opener' else 'a reliever'}. "
+                f"His numbers come from his own short outings, not a starter's "
+                f"prior.")
+
+    # 7. Games with only one probable listed.
+    if pitchers is not None and len(pitchers) and "game_pk" in pitchers.columns:
+        per = pitchers.groupby("game_pk").size()
+        short = int((per < 2).sum())
+        if short:
+            add(7, "Missing a probable", "var(--ink3)", str(short),
+                "games with one starter named",
+                "Hitters in those games are projected against a league-average "
+                "opponent until the second starter is announced.")
+
+    out.sort(key=lambda d: d["pri"])
+    return out[:limit]
+
+
+# Loaded once, before the tabs: the Slate page reads it for the pitching
+# findings and the Pitchers tab reads it for the table. Two tabs loading the
+# same file twice is how they drift.
+pit = None
+_pit_path = os.path.join(CACHE_DIR, f"pitchers_{slate_date}.csv")
+if os.path.exists(_pit_path):
+    try:
+        pit = pd.read_csv(_pit_path)
+    except Exception:
+        pit = None
+
+# The team model's output, one row per game: projected runs a side, total,
+# and how many hitters each lineup had when the prediction was made.
+#
+# The Game Lines TAB is off (see SHOW_GAME_LINES below for why) but the
+# file it read is still written every night, and the half of it that works
+# -- runs -- belongs on a game you have just clicked into. Absent file
+# means no block, not an empty state: a slate predicted before the team
+# model existed should look like a slate, not like something broke.
+teams = None
+_team_path = os.path.join(CACHE_DIR, f"teams_{slate_date}.csv")
+if os.path.exists(_team_path):
+    try:
+        teams = pd.read_csv(_team_path)
+    except Exception:
+        teams = None
+
 _when, _when_class = when_label(slate_date)
 # Built by hand rather than with %-d, which is POSIX-only and crashes on
 # Windows -- this project has already hit that once, in fmt_clock.
@@ -625,10 +962,53 @@ _pretty = f"{_ts.strftime('%A, %B')} {_ts.day}"
 _badge = (f'<span class="sp-when {_when_class}">{_when}</span>'
           if _when else "")
 
-html(f'<div class="sp-head"><div class="sp-mark"></div><div>'
-     f'<div class="sp-date">{_pretty}{_badge}</div>'
-     f'<div class="sp-sub">{slate_date} · {df["game_pk"].nunique()} games · '
-     f'{len(df)} hitters</div></div></div>')
+# The 30px gradient square is gone. It was a shape where information
+# should have been, which is why it read as a placeholder -- it was one.
+# The date is what you need to be certain about, so the date is the mark.
+_hl, _hr = st.columns([3, 1])
+with _hl:
+    html(f'<div class="sp-date sp-display" style="font-size:clamp(28px,4vw,40px);'
+         f'line-height:1.04">{_pretty}{_badge}</div>'
+         f'<div class="sp-summary">{slate_summary(df)}</div>')
+with _hr:
+    # Model health, permanently visible. A page that shows probabilities
+    # should show how the probabilities have been doing, without a trip to
+    # the Results tab to find out.
+    _hs = ""
+    _hp = os.path.join(CACHE_DIR, "pitcher_scoring_log.csv")
+    if os.path.exists(_hp):
+        try:
+            _hlog = pd.read_csv(_hp)
+            _hlog = _hlog[pd.to_datetime(_hlog["game_date"], errors="coerce")
+                          >= pd.Timestamp("2026-09-05")]
+            _k = _hlog[_hlog["line"] == 5.5]
+            if len(_k):
+                _w = _k["n"].sum()
+                _sk = float((_k["brier_skill"] * _k["n"]).sum() / _w)
+                _hs += (f'Strikeouts <b>{_sk * 100:+.1f}%</b> over 5.5<br>')
+        except Exception:
+            pass
+    _sp = os.path.join(CACHE_DIR, "scoring_log.csv")
+    if os.path.exists(_sp):
+        try:
+            _slog = pd.read_csv(_sp)
+            for _c in ("n", "base_rate", "brier"):
+                if f"clean_{_c}" in _slog.columns:
+                    _slog[_c] = _slog[f"clean_{_c}"].fillna(_slog[_c])
+            _g = _slog[_slog["label"] == "at least 1 walk"]
+            if len(_g):
+                _w = _g["n"].sum()
+                _did = float((_g["base_rate"] * _g["n"]).sum() / _w)
+                _br = float((_g["brier"] * _g["n"]).sum() / _w)
+                _ref = _did * (1 - _did)
+                if _ref > 0:
+                    _hs += (f'Best hitter prop, walks '
+                            f'<b>{(1 - _br / _ref) * 100:+.1f}%</b>')
+        except Exception:
+            pass
+    if _hs:
+        html(f'<div class="sp-health"><span class="k">Model, scored slates'
+             f'</span>{_hs}</div>')
 
 # Looking at an old slate is a legitimate thing to do and a very easy
 # thing to do by accident, since the picker defaults to the newest file
@@ -704,42 +1084,235 @@ def context_line(row) -> str:
 
 # ---------------------------------------------------------------- slate
 with tab_slate:
-    left, right = st.columns([3, 1])
-    with left:
+    # ---- what is true about tonight --------------------------------
+    _prop_label = props[DEFAULT_PROP][0] if DEFAULT_PROP in props \
+        else list(props.values())[0][0]
+    _findings = slate_findings(df, pit, DEFAULT_PROP, _prop_label)
+    if _findings:
+        html('<div class="sp-read">' + "".join(
+            f'<div class="sp-find">'
+            f'<div class="kind" style="color:{f["tone"]}">{f["kind"]}</div>'
+            f'<div class="fig">{f["fig"]}</div>'
+            f'<div class="unit">{f["unit"]}</div>'
+            f'<div class="txt">{f["txt"]}</div></div>'
+            for f in _findings) + '</div>')
+
+    # ---- the slate ---------------------------------------------------
+    #
+    # The page's centre of gravity. The old front page ranked twenty
+    # hitters and never mentioned a game; this is every game in first-pitch
+    # order, and each row is a link.
+    #
+    # A link rather than a button because Streamlit has no API to switch
+    # tabs -- setting ?game=<pk> reruns the app, the detail opens in place
+    # below, and the Games tab agrees because the same session key is set.
+    _open = st.query_params.get("game")
+    _open = int(_open) if str(_open).isdigit() else None
+    if _open is not None:
+        st.session_state.sp_game = _open
+
+    _g = (df.assign(_c=(df.get("lineup_status") == "confirmed"))
+            .groupby("game_pk")
+            .agg(start=("start", "first"),
+                 venue=("venue_name", "first"),
+                 conf=("_c", "all"))
+            .reset_index().sort_values("start", na_position="last"))
+
+    _rows = ""
+    for _r in _g.itertuples():
+        _gg = df[df.game_pk == _r.game_pk]
+        _away = _gg[_gg.is_home == 0]["team"]
+        _home = _gg[_gg.is_home == 1]["team"]
+        _a = _away.iloc[0] if len(_away) else "?"
+        _h = _home.iloc[0] if len(_home) else "?"
+        _arms = ""
+        if pit is not None and "expected_k" in pit.columns:
+            _pg = pit[pit.game_pk == _r.game_pk]
+            _arms = " · ".join(
+                f'<b>{str(x.pitcher).split()[-1]}</b> {x.expected_k:.1f}'
+                for x in _pg.itertuples() if pd.notna(x.expected_k))
+        _best = _gg.nlargest(1, DEFAULT_PROP)
+        _bn = _bv = ""
+        if len(_best):
+            _b = _best.iloc[0]
+            _slot = _b.get("lineup_slot")
+            _bn = (f'{_b["name"]} <i>· bats '
+                   f'{ORDINAL.get(int(_slot), int(_slot))}</i>'
+                   if pd.notna(_slot) else str(_b["name"]))
+            _bv = pct(_b[DEFAULT_PROP])
+        # Carry the saved-hitter list through the link, or clicking a game
+        # would silently empty the sidebar.
+        _keep = st.session_state.get("sp_picks") or []
+        _qs = f"game={int(_r.game_pk)}"
+        if _keep:
+            _qs += "&" + PICKS_PARAM + "=" + ",".join(str(x) for x in _keep)
+        _rows += (
+            f'<a class="sp-g{" on" if _open == _r.game_pk else ""}" '
+            f'href="?{_qs}" target="_self">'
+            f'<div class="t"><span class="sp-dot '
+            f'{"ok" if _r.conf else "wait"}"></span>{fmt_clock(_r.start)}</div>'
+            f'<div class="m">{_a}<i>at</i>{_h}</div>'
+            f'<div class="p">{_arms}</div>'
+            f'<div class="b">{_bn}</div>'
+            f'<div class="v">{_bv}</div></a>')
+
+    _l, _r2 = st.columns([3, 1])
+    with _l:
         html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
-             'Top of the slate</div><div style="color:var(--ink3);font-size:12.5px;'
-             'margin-bottom:6px">Every hitter, every game, ranked.</div>')
-    with right:
-        prop = st.selectbox("Prop", list(props),
-                            index=list(props).index(DEFAULT_PROP)
-                            if DEFAULT_PROP in props else 0,
-                            format_func=lambda c: props[c][0],
-                            label_visibility="collapsed")
+             'The slate</div>')
+    with _r2:
+        html('<div style="font-size:12px;color:var(--ink3);text-align:right;'
+             'padding-top:4px"><span class="sp-dot ok"></span>confirmed'
+             '<span class="sp-dot wait" style="margin-left:12px"></span>'
+             'projected</div>')
+    html(f'<div class="sp-games">{_rows}</div>')
 
-    top = df.nlargest(20, prop)
-    heroes = "".join(
-        f'<div class="sp-hero"><div class="sp-rk">#{i} on the slate</div>'
-        f'<div class="sp-nm">{r["name"]}{form_chip(r)}</div>'
-        f'<div class="sp-mt">{r.get("team","")} vs {r.get("opponent","")}'
-        f' · {r.get("opposing_pitcher","")}</div>'
-        f'<div class="sp-big">{pct(r[prop])}</div>'
-        f'<div class="sp-mt" style="margin-top:2px">{context_line(r)}</div></div>'
-        for i, (_, r) in enumerate(top.head(3).iterrows(), start=1))
-    html(f'<div class="sp-heroes">{heroes}</div>')
+    # ---- drill-down, in place ---------------------------------------
+    if _open is not None and _open in set(df.game_pk):
+        _sel = df[df.game_pk == _open]
+        _sa = _sel[_sel.is_home == 0]["team"]
+        _sh = _sel[_sel.is_home == 1]["team"]
+        _keep = st.session_state.get("sp_picks") or []
+        _back = ("?" + PICKS_PARAM + "=" + ",".join(str(x) for x in _keep)) \
+            if _keep else "?"
+        html(f'<div style="display:flex;justify-content:space-between;'
+             f'align-items:baseline;gap:14px;flex-wrap:wrap;margin:26px 0 8px">'
+             f'<div class="sp-display" style="font-size:19px">'
+             f'{_sa.iloc[0] if len(_sa) else "?"} at '
+             f'{_sh.iloc[0] if len(_sh) else "?"}</div>'
+             f'<a href="{_back}" target="_self" style="color:var(--accent);'
+             f'font-size:12.5px;text-decoration:none">← all games</a></div>')
 
-    # Bars run to 100%, not to the leader. Scaling to the maximum makes the
-    # best hitter's bar fill the track whatever his number is, so 65% and
-    # 25% both look like "the top of the scale".
-    rows = "".join(
-        f'<div class="sp-r">{i}</div>'
-        f'<div class="sp-pn">{r["name"]} <i>{r.get("team","")}</i>'
-        f'{form_chip(r)}</div>'
-        f'<div class="sp-ctx">{context_line(r)}</div>'
-        f'<div class="sp-track"><div class="sp-fill" '
-        f'style="width:{min(r[prop] * 100, 100):.1f}%"></div></div>'
-        f'<div class="sp-pv">{pct(r[prop])}</div>'
-        for i, (_, r) in enumerate(top.iloc[3:].iterrows(), start=4))
-    html(f'<div class="sp-rows">{rows}</div>')
+        # ---- the team numbers for this game --------------------------
+        #
+        # Runs and who scores them. No winner and no margin: both were
+        # measured and both were noise, and a number that is shown gets
+        # believed regardless of what the caption says about it.
+        #
+        # exp_runs is p(run) x expected_pa, written by predict_slate --
+        # the same per-hitter terms that were summed to make the team
+        # total, so the three names under a side really are the biggest
+        # contributors to the figure above them, not a separate ranking.
+        _tm = None
+        if teams is not None and "game_pk" in teams.columns:
+            _tm = teams[teams.game_pk == _open]
+            _tm = _tm.iloc[0] if len(_tm) else None
+        if _tm is not None:
+            _ar = pd.to_numeric(_tm.get("away_runs"), errors="coerce")
+            _hr = pd.to_numeric(_tm.get("home_runs"), errors="coerce")
+            if pd.notna(_ar) and pd.notna(_hr):
+                _an = _tm.get("away_team", "?")
+                _hn = _tm.get("home_team", "?")
+
+                def _scorers(team, n=3):
+                    if "exp_runs" not in _sel.columns:
+                        return ""
+                    side = (_sel[_sel["team"] == team]
+                            .dropna(subset=["exp_runs"]).nlargest(n, "exp_runs"))
+                    return " · ".join(
+                        f'<b>{str(r["name"]).split()[-1]}</b> {r["exp_runs"]:.2f}'
+                        for _, r in side.iterrows() if pd.notna(r.get("name")))
+
+                _body = ""
+                _as, _hs = _scorers(_an), _scorers(_hn)
+                if _as or _hs:
+                    _body = (f'<div class="sp-sc">Expected to score, in runs'
+                             f'<div class="who">{_an} &nbsp;{_as}</div>'
+                             f'<div class="who">{_hn} &nbsp;{_hs}</div></div>')
+
+                # A lineup the model could only partly fill scores low for
+                # a reason that has nothing to do with the teams. Say so,
+                # or the gap reads as a projection about the matchup.
+                _short = [t for t, k in ((_an, "away_hitters"),
+                                         (_hn, "home_hitters"))
+                          if pd.notna(_tm.get(k)) and int(_tm[k]) < 9]
+                _thin = (f'<div class="sp-thin">Lineup incomplete for '
+                         f'{" and ".join(_short)} — that side\'s runs are low '
+                         f'by roughly the missing share.</div>') if _short else ""
+
+                html(f'<div class="sp-tb"><div class="sd">'
+                     f'<div><span class="tm">{_an}</span>'
+                     f'<span class="rn">{_ar:.1f}</span></div>'
+                     f'<div class="at">at</div>'
+                     f'<div><span class="tm">{_hn}</span>'
+                     f'<span class="rn">{_hr:.1f}</span></div>'
+                     f'<div class="tot"><b>{_ar + _hr:.1f}</b> runs total</div>'
+                     f'</div>{_body}{_thin}'
+                     f'<div class="sp-thin" style="color:var(--ink3)">'
+                     f'A projected score is the <b style="color:var(--ink2)">'
+                     f'average</b> of how the game goes, not a guess at the '
+                     f'final. No winner is shown because the model has not '
+                     f'earned one — graded over four slates its win '
+                     f'probabilities never left 45–57% and beat a coin flip '
+                     f'on none of them.</div></div>')
+
+        _cols = ["name", "team", "lineup_slot", "expected_pa",
+                 "opposing_pitcher"] + list(props)
+        _view = _sel[[c for c in _cols if c in _sel.columns]].copy()
+        _view = _view.sort_values(["team", "lineup_slot"], na_position="last")
+        _view = _view.rename(columns={
+            **{c: BASE_LABELS[c] for c in BASE_LABELS if c in _view.columns},
+            "opposing_pitcher": "Facing",
+            **{k: props[k][0] for k in props if k in _view.columns}})
+        _pl = [props[k][0] for k in props if props[k][0] in _view.columns]
+        _st = _view.style
+        for _lab in _pl:
+            _key = next(k for k in props if props[k][0] == _lab)
+            _st = _st.apply(
+                lambda col, c=cuts[_key]: [
+                    ("" if band_of(v, c) == 0 else
+                     f"background-color:{BANDS[band_of(v, c)][0]};"
+                     f"color:{BANDS[band_of(v, c)][1]}")
+                    for v in col], subset=[_lab])
+        _fmt = {l: "{:.1%}" for l in _pl}
+        if "PA" in _view.columns:
+            _fmt["PA"] = "{:.2f}"
+        if "Slot" in _view.columns:
+            _fmt["Slot"] = "{:.0f}"
+        st.dataframe(_st.format(_fmt, na_rep="—"), width="stretch",
+                     hide_index=True,
+                     height=min(700, 40 + 35 * len(_view)))
+
+    # ---- leaderboard and what to watch -------------------------------
+    _lb, _wt = st.columns([1.55, 1])
+    with _lb:
+        _c1, _c2 = st.columns([2, 3])
+        with _c1:
+            html('<div style="font-size:15px;font-weight:640;color:var(--ink);'
+                 'padding-top:6px">Best on the board</div>')
+        with _c2:
+            prop = st.selectbox("Prop", list(props),
+                                index=list(props).index(DEFAULT_PROP)
+                                if DEFAULT_PROP in props else 0,
+                                format_func=lambda c: props[c][0],
+                                label_visibility="collapsed")
+        _top = df.nlargest(8, prop)
+        _med = float(df[prop].median())
+        _lbr = "".join(
+            f'<div class="r"><div class="n">{i}</div>'
+            f'<div class="w">{r["name"]} <i>{r.get("team","")}</i>'
+            f'{form_chip(r)}</div>'
+            f'<div class="sp-tw"><div class="sp-track">'
+            f'<div class="sp-fill" style="width:{min(r[prop]*100,100):.1f}%">'
+            f'</div></div><div class="sp-med" style="left:{_med*100:.1f}%">'
+            f'</div></div>'
+            f'<div class="v">{pct(r[prop])}</div></div>'
+            for i, (_, r) in enumerate(_top.iterrows(), start=1))
+        html(f'<div class="sp-lb">{_lbr}</div>'
+             f'<div style="margin-top:10px;font-size:12px;color:var(--ink3)">'
+             f'The tick is the slate median, {pct(_med)} — everything here '
+             f'beats a typical hitter tonight. All {len(df)} are on the '
+             f'<b style="color:var(--ink2)">All hitters</b> tab.</div>')
+    with _wt:
+        html('<div style="font-size:15px;font-weight:640;color:var(--ink);'
+             'margin-bottom:7px">Watch tonight</div>')
+        _w = ""
+        for f in slate_findings(df, pit, prop, props[prop][0], limit=9)[3:]:
+            _w += (f'<div class="sp-w"><div class="t">{f["kind"]}</div>'
+                   f'<div class="d">{f["txt"]}</div></div>')
+        html(f'<div class="sp-watch">{_w}</div>' if _w else
+             '<div style="font-size:12.5px;color:var(--ink3)">'
+             'Nothing unusual about tonight — every check came back clean.</div>')
 
 
 # ---------------------------------------------------------------- games
@@ -852,14 +1425,6 @@ with tab_pitch:
     # and a starter is not a hitter -- carrying nine pitcher columns on
     # every batter row to describe fourteen pitchers would be worse than a
     # second table.
-    pit_path = os.path.join(CACHE_DIR, f"pitchers_{slate_date}.csv")
-    pit = None
-    if os.path.exists(pit_path):
-        try:
-            pit = pd.read_csv(pit_path)
-        except Exception:
-            pit = None
-
     if pit is not None and not pit.empty and "prob_k_over_5.5" in pit.columns:
         # Sortable, like All hitters, rather than hand-built HTML.
         #
@@ -1347,31 +1912,6 @@ with tab_pitch:
 
 
 # ---------------------------------------------------------- all hitters
-BASE_LABELS = {"name": "Hitter", "team": "Team", "opponent": "Opp",
-               "lineup_slot": "Slot", "expected_pa": "PA",
-               # Sortable here, which the chips on the Slate tab are not --
-               # this is the view for "show me everyone running hot".
-               "form_z": "Form"}
-
-# Hover text for the prop columns. "TB 1.5" is unreadable to anyone who has
-# not been staring at this for a week, and the header itself has no room to
-# say more -- that is the whole reason the columns fit now.
-PROP_HELP = {
-    "prob_hr":            "Chance he hits at least one home run",
-    "prob_tb_over_1.5":   "Chance of 2+ total bases — a double, or two singles",
-    "prob_tb_over_2.5":   "Chance of 3+ total bases",
-    "prob_tb_over_3.5":   "Chance of 4+ total bases",
-    "prob_hit":           "Chance of at least one hit",
-    "prob_hits_over_1.5": "Chance of 2+ hits",
-    "prob_hits_over_2.5": "Chance of 3+ hits",
-    "prob_hrr_over_0.5":  "Chance of at least one hit, run scored or RBI. "
-                          "Walks do not count.",
-    "prob_hrr_over_1.5":  "Chance of 2+ hits, runs and RBI combined",
-    "prob_hrr_over_2.5":  "Chance of 3+ hits, runs and RBI combined",
-    "prob_hrr_over_3.5":  "Chance of 4+ hits, runs and RBI combined",
-    "prob_walk":          "Chance he draws at least one walk",
-}
-
 with tab_all:
     # Marker the CSS above keys on to widen this panel and only this one.
     html('<div class="sp-wide"></div>'
