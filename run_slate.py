@@ -141,36 +141,44 @@ def main():
     # 1. Lineups. Free, one second, and the thing worth knowing before
     #    committing a prediction: projected slots and confirmed slots give
     #    materially different plate appearances.
-    _run("1/4  Lineups", ["check_lineups.py", game_date], args.dry_run)
+    _run("1/5  Lineups", ["check_lineups.py", game_date], args.dry_run)
 
     # 2. Predictions. Free. MUST come before compare_market, which reads
     #    the pitcher file this writes.
-    if not _run("2/4  Predictions", ["predict_slate.py", game_date],
+    if not _run("2/5  Predictions", ["predict_slate.py", game_date],
                 args.dry_run):
         print("\n  Stopping: predictions failed, so there is nothing for the "
               "market comparison to compare against. No credits were spent.")
         return 1
+
+    # 3. Recent form for tonight's starters. Free, local, and it has to
+    #    run HERE rather than in the dashboard: it reads the statcast
+    #    pitcher caches, which are 1.2 GB and permanently untracked, so
+    #    the deployed app can never compute it. ~25 KB a night.
+    #
+    #    After predict_slate because it reads pitchers_{date}.csv to know
+    #    who is starting. A failure is not fatal -- the Pitchers tab says
+    #    so and shows everything else.
+    _run("3/5  Recent form", ["pitcher_form.py", game_date], args.dry_run)
 
     if args.no_odds:
         print(f"\n{'=' * 72}\n  --no-odds: skipped both odds calls and "
               f"compare_market. Nothing spent.\n{'=' * 72}")
         return 0
 
-    # 3 and 4. The only steps that cost anything. Game lines first: two
-    #    credits for the whole slate, and if the key or the plan is wrong
-    #    it fails here having spent two rather than fifteen.
-    _run("3/4  Strikeout props (1 credit per game not yet started)",
+    # 4. The only step that costs anything.
+    _run("4/5  Strikeout props (1 credit per game not yet started)",
          ["-m", "data.odds_lines", game_date], args.dry_run)
 
-    # 4. Free, local, and the step that was running too early.
-    _run("4/4  Model vs market", ["compare_market.py", game_date],
+    # 5. Free, local, and the step that was running too early.
+    _run("5/5  Model vs market", ["compare_market.py", game_date],
          args.dry_run)
 
     if not args.dry_run:
         print(f"\n{'=' * 72}\nWROTE\n{'=' * 72}")
         for name in (f"slate_{game_date}", f"pitchers_{game_date}",
-                     f"teams_{game_date}", f"odds_{game_date}",
-                     f"market_compare_{game_date}"):
+                     f"teams_{game_date}", f"pitcher_form_{game_date}",
+                     f"odds_{game_date}", f"market_compare_{game_date}"):
             path = os.path.join(CACHE, f"{name}.csv")
             if os.path.exists(path):
                 stamp = pd.Timestamp(os.path.getmtime(path), unit="s",

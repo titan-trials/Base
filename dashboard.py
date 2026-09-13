@@ -66,6 +66,7 @@ so an older slate renders its own props and simply shows fewer of them.
 import glob
 import os
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -954,6 +955,114 @@ if os.path.exists(_team_path):
     except Exception:
         teams = None
 
+
+# --------------------------------------------------------------------
+# PER-PITCHER STRIKEOUT LINES
+#
+# The Pitchers tab used to show two fixed columns, over 5.5 and over 6.5,
+# for everyone. Nolan: "sometimes there's a line for over five point five
+# for all the people on the slate... his betting line's for like eight
+# eight point five. So it doesn't make sense to have a five point five
+# line for someone that's gonna be over eight."
+#
+# Right, and the fix costs nothing, because predict_slate already writes
+# the WHOLE distribution to the `k_dist` column -- a comma-separated pmf
+# indexed from zero strikeouts. Verified against Tyler Glasnow on
+# 2026-09-12: summing k_dist[6:] reproduces the stored prob_k_over_5.5 to
+# seven decimals. So any line is available for any pitcher on any slate
+# already on disk, with nothing re-run and no history lost.
+#
+# WHICH line to show is the interesting half. The answer is the one the
+# book is actually offering, because that is the bet that exists; his own
+# distribution is the fallback for a night when the odds fetch was late,
+# missed, or skipped a game that had already started.
+# --------------------------------------------------------------------
+def parse_pmf(text):
+    """A stored `k_dist` / `outs_dist` string as a numpy array, or None."""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        pmf = np.array([float(x) for x in text.split(",") if x.strip()])
+    except ValueError:
+        return None
+    return pmf if pmf.size and pmf.sum() > 0 else None
+
+
+def prob_over(pmf, line):
+    """
+    P(count > line) for a half-integer line.
+
+    Over 5.5 means six or more, so the sum starts at ceil(line). Getting
+    this off by one would shift every probability on the page by a whole
+    strikeout, silently and in the direction that flatters the model.
+    """
+    if pmf is None:
+        return float("nan")
+    start = int(np.ceil(line))
+    return float(pmf[start:].sum()) if start < len(pmf) else 0.0
+
+
+def own_line(pmf):
+    """
+    The half-integer line closest to a coin flip for this pitcher.
+
+    Not the mean. A book sets the line where the over and under are close
+    to even money, and for a skewed count distribution the median is
+    nearer that point than the mean is. Walking the candidate lines and
+    taking the one whose over probability is closest to 0.5 finds it
+    directly and needs no assumption about the shape.
+    """
+    if pmf is None:
+        return float("nan")
+    cands = np.arange(0.5, min(len(pmf), 16) + 0.5, 1.0)
+    if not len(cands):
+        return float("nan")
+    return float(min(cands, key=lambda L: abs(prob_over(pmf, L) - 0.5)))
+
+
+def market_lines(date):
+    """
+    {player: (line, market_prob)} from the captured odds for this slate.
+
+    The line closest to even money is the one the book is surest about,
+    and the one worth putting in a single column -- books offer several
+    alternates per pitcher and the outer ones carry most of the hold.
+
+    Reads odds_{date}.csv rather than market_compare_{date}.csv because
+    the odds file exists whenever a fetch happened, while the compare
+    file additionally requires compare_market.py to have run afterwards.
+    """
+    path = os.path.join(CACHE_DIR, f"odds_{date}.csv")
+    if not os.path.exists(path):
+        return {}
+    try:
+        odds = pd.read_csv(path)
+    except Exception:
+        return {}
+    need = {"player", "line", "prob_over"}
+    if not need <= set(odds.columns):
+        return {}
+    if "market" in odds.columns:
+        odds = odds[odds["market"] == "pitcher_strikeouts"]
+    odds = odds.dropna(subset=["player", "line", "prob_over"])
+    if odds.empty:
+        return {}
+    odds = odds.assign(_d=(odds["prob_over"] - 0.5).abs())
+    best = odds.sort_values("_d").groupby("player").first()
+    # How many books quoted it comes back too. It matters more than it
+    # looks: on 2026-09-13 Joe Ryan's captured line was 3.5 from THREE
+    # books, and the model -- which projects him at 5.4 strikeouts --
+    # read that as a +21 point edge. A 132-start starter does not have a
+    # 3.5 line unless something is going on (a pitch limit, a bullpen
+    # game) that three books know about and the model does not. Treating
+    # a thin alternate as "the market" manufactures exactly the edges
+    # that are least real, so the count is shown and read as a warning.
+    return {str(k): (float(v["line"]), float(v["prob_over"]),
+                     int(v["n_books"]) if "n_books" in best.columns
+                     and pd.notna(v.get("n_books")) else 0)
+            for k, v in best.iterrows()}
+
+
 _when, _when_class = when_label(slate_date)
 # Built by hand rather than with %-d, which is POSIX-only and crashes on
 # Windows -- this project has already hit that once, in fmt_clock.
@@ -1036,7 +1145,8 @@ if _when_class == "past":
 # the tab returns exactly as it was.
 SHOW_GAME_LINES = False
 
-_TAB_LABELS = ["Slate", "Games", "Pitchers", "All hitters", "Results"]
+_TAB_LABELS = ["Slate", "Games", "Pitchers", "All hitters", "Bet ready",
+               "Results"]
 if SHOW_GAME_LINES:
     _TAB_LABELS.insert(3, "Game Lines")
 _TABS = dict(zip(_TAB_LABELS, st.tabs(_TAB_LABELS)))
@@ -1044,6 +1154,7 @@ tab_slate = _TABS["Slate"]
 tab_games = _TABS["Games"]
 tab_pitch = _TABS["Pitchers"]
 tab_all = _TABS["All hitters"]
+tab_bet = _TABS["Bet ready"]
 tab_res = _TABS["Results"]
 tab_lines = _TABS.get("Game Lines")
 
@@ -1470,11 +1581,46 @@ with tab_pitch:
             "K": pd.to_numeric(pit["expected_k"], errors="coerce"),
         })
         PIT_PROPS = {}
-        for col, label in (("prob_k_over_5.5", "5.5 K"),
-                           ("prob_k_over_6.5", "6.5 K")):
-            if col in pit.columns:
-                pit_view[label] = pd.to_numeric(pit[col], errors="coerce")
-                PIT_PROPS[label] = col
+
+        # ---- the strikeout line, one per pitcher ---------------------
+        #
+        # Three columns, each meaning exactly one thing:
+        #   Line   the number on the board, or his own if none was caught
+        #   Over   the model's probability AT THAT LINE
+        #   Edge   model minus market, blank when there is no market
+        #
+        # Over is deliberately NOT colour-banded. Every line sits near its
+        # own pitcher's coin flip by construction, so the column clusters
+        # around 50% and a quartile colour on it would be reading noise.
+        # Edge is the decision-relevant number and is the one coloured.
+        _mkt = market_lines(slate_date)
+        if "k_dist" in pit.columns:
+            _pmfs = [parse_pmf(v) for v in pit["k_dist"]]
+            _lines, _over, _mp, _bk = [], [], [], []
+            for _name, _pmf in zip(pit["pitcher"], _pmfs):
+                _hit = _mkt.get(str(_name))
+                _line = _hit[0] if _hit else own_line(_pmf)
+                _lines.append(_line)
+                _over.append(prob_over(_pmf, _line) if pd.notna(_line)
+                             else float("nan"))
+                _mp.append(_hit[1] if _hit else float("nan"))
+                _bk.append(_hit[2] if _hit else 0)
+            pit_view["Line"] = _lines
+            pit_view["Over"] = _over
+            pit_view["Mkt"] = _mp
+            pit_view["Books"] = _bk
+            pit_view["Edge"] = [
+                (o - m) if pd.notna(m) and pd.notna(o) else float("nan")
+                for o, m in zip(_over, _mp)]
+            PIT_PROPS["Edge"] = "edge"
+        else:
+            # A slate predicted before k_dist was written still renders,
+            # with the two fixed columns it was built with.
+            for col, label in (("prob_k_over_5.5", "5.5 K"),
+                               ("prob_k_over_6.5", "6.5 K")):
+                if col in pit.columns:
+                    pit_view[label] = pd.to_numeric(pit[col], errors="coerce")
+                    PIT_PROPS[label] = col
         if "expected_outs" in pit.columns:
             outs = pd.to_numeric(pit["expected_outs"], errors="coerce")
             pit_view["Outs"] = outs
@@ -1487,9 +1633,44 @@ with tab_pitch:
 
         # Quartiles measured on the whole slate, so the colour means the
         # same thing after the user sorts as it did before.
+        #
+        # Edge is excluded on purpose. A quartile always paints a top
+        # quarter, so on a night when the model and the market agree
+        # everywhere it would colour the largest of a set of trivial
+        # disagreements and call it a find. Edge gets FIXED thresholds
+        # instead -- the same 5 points the market block below uses -- so
+        # no colour on the page is the correct and common answer.
         pit_cuts = {lab: [float(pit_view[lab].quantile(q))
                           for q in (.25, .50, .75)]
-                    for lab in PIT_PROPS}
+                    for lab in PIT_PROPS if lab != "Edge"}
+
+        # Four books is the threshold for calling something a consensus.
+        # Below it a "line" is one or two shops posting an alternate, and
+        # a disagreement with it is not an edge.
+        MIN_BOOKS = 4
+
+        def pit_edge_fill(series):
+            books = pit_view.get("Books")
+            out = []
+            for i, v in enumerate(series):
+                thin = books is not None and books.iloc[i] < MIN_BOOKS
+                if pd.isna(v) or abs(v) < 0.05 or thin:
+                    out.append("")
+                else:
+                    bg, ink = BANDS[3] if v > 0 else BANDS[1]
+                    out.append(f"background-color:{bg};color:{ink}")
+            return out
+
+        def pit_books_fill(series):
+            out = []
+            for v in series:
+                if pd.isna(v) or v == 0:
+                    out.append(f"color:{_css_var('ink3')}")   # no price
+                elif v < MIN_BOOKS:
+                    out.append(f"color:{_css_var('warn')}")   # thin
+                else:
+                    out.append("")
+            return out
 
         def pit_band_fill(series, column_cuts):
             out = []
@@ -1517,7 +1698,7 @@ with tab_pitch:
                     if pd.notna(v) and v > 30 else "" for v in series]
 
         pit_styled = pit_view.style
-        for lab in PIT_PROPS:
+        for lab in pit_cuts:          # NOT PIT_PROPS -- Edge is excluded
             pit_styled = pit_styled.apply(pit_band_fill,
                                           column_cuts=pit_cuts[lab],
                                           subset=[lab])
@@ -1530,9 +1711,18 @@ with tab_pitch:
                 lambda col: [f"color:{_css_var('warn')}"
                              if v in ("opener", "reliever", "unknown") else ""
                              for v in col], subset=["Role"])
+        if "Edge" in pit_view:
+            pit_styled = pit_styled.apply(pit_edge_fill, subset=["Edge"])
+        if "Books" in pit_view:
+            pit_styled = pit_styled.apply(pit_books_fill, subset=["Books"])
         pit_fmt = {lab: "{:.1%}" for lab in PIT_PROPS}
         pit_fmt.update({"BF": "{:.1f}", "K": "{:.1f}", "Starts": "{:.0f}",
                         "Rest": "{:.0f}"})
+        for _c, _f in (("Line", "{:.1f}"), ("Over", "{:.1%}"),
+                       ("Mkt", "{:.1%}"), ("Edge", "{:+.1%}"),
+                       ("Books", "{:.0f}")):
+            if _c in pit_view:
+                pit_fmt[_c] = _f
         if "Outs" in pit_view:
             pit_fmt.update({"Outs": "{:.1f}", "IP": "{:.1f}"})
         pit_styled = pit_styled.format(pit_fmt, na_rep="—")
@@ -1584,8 +1774,55 @@ with tab_pitch:
                      "and graded against real innings pitched."),
             "IP": st.column_config.Column(
                 width=52, help="The same number in innings — outs / 3."),
+            "Line": st.column_config.Column(
+                width=56,
+                help="The strikeout line on the board for HIM, not a fixed "
+                     "one shared by the slate. Taken from tonight's captured "
+                     "odds where a price exists; where none was caught, it "
+                     "is the line his own projected distribution puts "
+                     "closest to a coin flip. The Src column says which."),
+            "Over": st.column_config.Column(
+                width=62,
+                help="The model's chance he goes over THAT line. Not "
+                     "colour-coded, and it should not be: every line sits "
+                     "near its own pitcher's even-money point, so this "
+                     "column clusters around 50% by construction and a "
+                     "colour on it would be painting noise."),
+            "Mkt": st.column_config.Column(
+                width=58,
+                help="What the book's price implies for the same line, "
+                     "with the hold removed. Blank when no price was "
+                     "captured for him."),
+            "Edge": st.column_config.Column(
+                width=62,
+                help="Model minus market, at the same line. Coloured past "
+                     "5 points either way — green where the model likes "
+                     "the over, red the under. Most nights most rows are "
+                     "blank or uncoloured, and that is the honest answer: "
+                     "agreeing with the market is not an edge, it means "
+                     "the model is reproducing public information "
+                     "competently. Uncoloured whenever Books is under 4 — "
+                     "the biggest numbers in this column are usually the "
+                     "least real, because a thin alternate line is where "
+                     "the market is pricing something the model cannot "
+                     "see."),
+            "Books": st.column_config.Column(
+                width=58,
+                help="How many sportsbooks were quoting this line when the "
+                     "odds were captured. Dimmed zero means no price at all "
+                     "— the line beside it is the model's own and there is "
+                     "nothing here to bet against. Amber under 4 means one "
+                     "or two shops posting an alternate, which is not a "
+                     "consensus: Edge is left uncoloured on those rows "
+                     "however large it looks. On 2026-09-13 Joe Ryan's only "
+                     "captured line was 3.5 from three books, and the model "
+                     "read it as a 21-point edge. A 132-start starter does "
+                     "not get a 3.5 line unless three books know something "
+                     "the model does not."),
         }
         for lab, col in PIT_PROPS.items():
+            if lab == "Edge":
+                continue          # configured by hand above
             pit_config[lab] = st.column_config.Column(
                 width=76,
                 help=("Chance he records more than "
@@ -1608,10 +1845,31 @@ with tab_pitch:
         if back_n:
             note += (f' · {back_n} have a real career but no start in a '
                      f'year — sort by Rest to find them')
+        # The bias warning, and it is measured rather than a hunch: across
+        # 202 pitcher-nights on ten captured slates the model moves 0.67
+        # strikeouts for every 1 the market moves (lab_k_spread.py). It
+        # runs high on short-outing arms and low on aces, so its biggest
+        # OVERs cluster at the lowest lines -- which is exactly where they
+        # look most attractive. Counted from tonight's own rows rather
+        # than asserted, so on a night with no such rows it says nothing.
+        _low = 0
+        if "Edge" in pit_view and "Books" in pit_view:
+            _shown = (pit_view["Edge"].abs() >= 0.05) & (pit_view["Books"] >= MIN_BOOKS)
+            _low = int((_shown & (pit_view["Edge"] > 0)
+                        & (pit_view["Line"] <= 4.5)).sum())
+        _bias = (f'<br><b style="color:var(--ink2)">{_low} of tonight\'s '
+                 f'coloured edges are OVERs at 4.5 or below.</b> That is the '
+                 f'shape of a known bias, not a find: measured over 202 '
+                 f'pitcher-nights the model moves 0.67 strikeouts for every '
+                 f'1 the market moves, so it reads high on short-outing arms '
+                 f'and low on aces. A large OVER at a low line is usually '
+                 f'the market pricing a pitch limit or a bullpen game that '
+                 f'the model cannot see.') if _low else ''
         html(f'<div style="margin-top:10px;font-size:12px;color:var(--ink3);'
              f'line-height:1.55">Click any header to sort{note}. Colour is '
              f'which quarter of tonight\'s starters he falls into, measured '
              f'on the whole slate so it keeps its meaning after you sort.'
+             f'{_bias}'
              f'<br><b style="color:var(--ink2)">Outs</b> is how deep he '
              f'goes: 14.5 is getting through five innings, 17.5 through '
              f'six. Model only — the outs market is charged per game and '
@@ -1622,6 +1880,111 @@ with tab_pitch:
              f'do not agree, and a pitcher high in one and low in the '
              f'other is telling you something a single column cannot.'
              f'</div>')
+
+        # ---- recent form ------------------------------------------------
+        #
+        # Nolan: "I need to check how he's been recently and how he is in
+        # home starts and how many pitches has he been throwing in all his
+        # starts."
+        #
+        # All three come out of the statcast pitcher caches, which the
+        # DEPLOYED app cannot read -- they are 1.2 GB and untracked on
+        # purpose. pitcher_form.py computes this on the machine that has
+        # them and writes ~25 KB a night; see the .gitignore note.
+        #
+        # There is no versus-opponent block here and there should not be.
+        # It was measured (lab_opponent.py): real overdispersion of about
+        # 2.3 points of strikeout rate, z = +5.3, that does NOT survive a
+        # split-half test -- r = +0.019 against a null of -0.001 +/- 0.030
+        # over 869 pairings. Drift and clustering, not a trait. Half the
+        # reason to write a lab script is to know what not to build.
+        _form_path = os.path.join(CACHE_DIR, f"pitcher_form_{slate_date}.csv")
+        _form = None
+        if os.path.exists(_form_path):
+            try:
+                _form = pd.read_csv(_form_path)
+            except Exception:
+                _form = None
+
+        if _form is not None and not _form.empty and "pitcher_id" in pit:
+            html('<div style="font-size:15px;font-weight:640;color:var(--ink);'
+                 'margin-top:26px">Recent form</div>'
+                 '<div style="color:var(--ink3);font-size:12.5px;'
+                 'margin-bottom:10px">His last ten starts — how deep he went, '
+                 'how many pitches it took, and how it split home and '
+                 'away.</div>')
+            _have = set(_form["pitcher_id"].dropna().astype(int))
+            _opts = [(int(r["pitcher_id"]), str(r["pitcher"]))
+                     for _, r in pit.iterrows()
+                     if pd.notna(r.get("pitcher_id"))
+                     and int(r["pitcher_id"]) in _have]
+            if _opts:
+                _pick = st.selectbox(
+                    "Pitcher", _opts, format_func=lambda o: o[1],
+                    key="pit_form_pick", label_visibility="collapsed")
+                _his = _form[_form["pitcher_id"] == _pick[0]].copy()
+                _his = _his.sort_values("game_date", ascending=False)
+
+                # The split summary first: it is the question asked, and
+                # it needs its sample size beside it or it is a number
+                # without a reason to believe it.
+                _cards = ""
+                for _flag, _lab in ((True, "At home"), (False, "On the road")):
+                    _side = _his[_his["home"].astype(bool) == _flag]
+                    if _side.empty:
+                        continue
+                    _bf = float(_side["bf"].sum())
+                    _kr = float(_side["k"].sum()) / _bf if _bf else float("nan")
+                    _cards += (
+                        f'<div class="sp-find" style="padding:12px 14px">'
+                        f'<div class="kind" style="color:var(--ink3)">'
+                        f'{_lab}</div>'
+                        f'<div class="fig">{_side["pitches"].mean():.0f}</div>'
+                        f'<div class="unit">pitches a start</div>'
+                        f'<div class="txt">{len(_side)} of these ten · '
+                        f'<b>{_side["bf"].mean():.1f}</b> batters · '
+                        f'<b>{_kr:.1%}</b> struck out</div></div>')
+                if _cards:
+                    html(f'<div class="sp-read">{_cards}</div>')
+
+                _tbl = _his[["game_date", "opp", "home", "pitches", "bf", "k",
+                             "last_inning"]].copy()
+                _tbl["home"] = np.where(_tbl["home"].astype(bool), "vs", "at")
+                _tbl["K%"] = _tbl["k"] / _tbl["bf"].replace(0, pd.NA)
+                _tbl = _tbl.rename(columns={
+                    "game_date": "Date", "opp": "Opp", "home": "H/A",
+                    "pitches": "Pitches", "bf": "BF", "k": "K",
+                    "last_inning": "Thru inn"})
+                st.dataframe(
+                    _tbl.style.format({"K%": "{:.1%}"}, na_rep="—"),
+                    width="stretch", hide_index=True,
+                    height=min(420, 40 + 35 * len(_tbl)))
+
+                html('<div style="margin-top:8px;font-size:12px;'
+                     'color:var(--ink3);line-height:1.55">'
+                     'The home/away split is shown as a <b '
+                     'style="color:var(--ink2)">record</b>, not a signal. It '
+                     'has real sample behind it — across the cached starters '
+                     'the lighter of a pitcher\'s two halves still holds '
+                     'about 46 starts — but whether it PREDICTS anything has '
+                     'not been tested, and the model does not use it.<br>'
+                     'There is deliberately no “against this opponent” '
+                     'column. That one was tested: the residual after his '
+                     'own rate and the opponent\'s own rate is real but does '
+                     'not repeat (split-half r = +0.02 against a null of '
+                     '−0.00 ± 0.03 over 869 pairings), so a past number '
+                     'against tonight\'s team tells you nothing about '
+                     'tonight.</div>')
+        elif "k_dist" in pit.columns:
+            html('<div style="margin-top:22px;font-size:12px;'
+                 'color:var(--ink3);line-height:1.55">'
+                 '<b style="color:var(--ink2)">Recent form</b> is not in this '
+                 'slate. It comes from <code>pitcher_form.py</code>, which '
+                 'reads the statcast caches — those are 1.2 GB and stay out '
+                 'of git, so the summary has to be written on the machine '
+                 'that has them and committed as its own small file. Run '
+                 '<code>python pitcher_form.py</code> after a predict and it '
+                 'appears here.</div>')
 
     elif "opposing_pitcher" not in df.columns:
         st.info("This slate file has no pitcher information.")
@@ -2107,6 +2470,149 @@ render_picks_panel(df, props, cuts)
 
 
 # -------------------------------------------------------------- results
+# ------------------------------------------------------------- bet ready
+#
+# Nolan: "games get posted around like the same time for a set of games...
+# is there any way maybe we can make a list on the... be like, hey, bet
+# ready, parlay, you can just copy."
+#
+# Games really do cluster. The 2026-09-12 slate was fifteen games in eight
+# windows at a 30-minute threshold, with five of them between 4:05 and
+# 4:10 PM. The grouping is the whole feature; the rest is saying honestly
+# what the legs in a group are worth together, which is NOT the product of
+# their probabilities.
+with tab_bet:
+    html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
+         'Bet ready</div><div style="color:var(--ink3);font-size:12.5px;'
+         'margin-bottom:14px">Tonight\'s board split into first-pitch '
+         'windows, strongest legs first, in a form you can copy.</div>')
+
+    _bl, _bm, _br = st.columns([2, 1, 1])
+    with _bl:
+        bet_prop = st.selectbox(
+            "Prop", list(props),
+            index=list(props).index(DEFAULT_PROP) if DEFAULT_PROP in props else 0,
+            format_func=lambda c: props[c][0], key="bet_prop")
+    with _bm:
+        bet_n = st.selectbox("Legs per window", [1, 2, 3, 4, 5], index=2,
+                             key="bet_n")
+    with _br:
+        bet_floor = st.selectbox("Minimum", [0.0, 0.4, 0.5, 0.6, 0.7],
+                                 index=2, format_func=lambda v: f"{v:.0%}",
+                                 key="bet_floor")
+
+    _bd = df.dropna(subset=[bet_prop, "start"]).copy()
+    if _bd.empty:
+        html('<div class="sp-empty">Nothing to show for this prop.</div>')
+    else:
+        # Cluster on first pitch. A 30-minute gap is the break: 4:05 and
+        # 4:10 are the same window, 4:10 and 6:10 are not.
+        _starts = (_bd.drop_duplicates("game_pk")[["game_pk", "start"]]
+                      .sort_values("start"))
+        _gap = _starts["start"].diff() > pd.Timedelta(minutes=30)
+        _starts["window"] = _gap.cumsum()
+        _bd = _bd.merge(_starts[["game_pk", "window"]], on="game_pk")
+
+        _lines, _blocks, _warn_any = [], "", False
+        for _w, _g in _bd.groupby("window"):
+            _picked = (_g[_g[bet_prop] >= bet_floor]
+                       .nlargest(int(bet_n), bet_prop))
+            if _picked.empty:
+                continue
+            _t0, _t1 = _g["start"].min(), _g["start"].max()
+            _label = (fmt_clock(_t0) if _t0 == _t1
+                      else f"{fmt_clock(_t0)} – {fmt_clock(_t1)}")
+            _ngames = _g["game_pk"].nunique()
+
+            # Two legs from one lineup rise and fall together -- the same
+            # pitcher, the same park, the same night. Multiplying their
+            # probabilities understates the true joint chance, so a parlay
+            # priced as independent pays less than the risk deserves. The
+            # answer here is to say so, not to silently drop a leg the
+            # user might want.
+            # In a window with ONE game every leg is same-game by
+            # definition, so flagging each of them separately is noise --
+            # three identical warnings that say nothing the window header
+            # does not. Mark the window instead, and reserve the per-leg
+            # flag for windows where it actually distinguishes rows.
+            _solo = _ngames == 1
+            _dupe = _picked["game_pk"].duplicated(keep=False)
+            _warn_any |= bool(_dupe.any())
+
+            _rows = ""
+            # The pasted text has to stand on its own -- a bare list of
+            # names loses which window each leg belongs to, which is the
+            # only reason this tab groups them in the first place.
+            _lines.append(f"{_label}  ({_ngames} game"
+                          f"{'s' if _ngames != 1 else ''}"
+                          f"{' — every leg correlated' if _solo else ''})")
+            for _, _r in _picked.iterrows():
+                _slot = _r.get("lineup_slot")
+                _bat = (f' · bats {ORDINAL.get(int(_slot), int(_slot))}'
+                        if pd.notna(_slot) else "")
+                _same = ('' if _solo else
+                         ' <span style="color:var(--warn)">same game</span>'
+                         if _picked["game_pk"].tolist().count(_r["game_pk"]) > 1
+                         else "")
+                _rows += (
+                    f'<div class="r"><div class="w">{_r["name"]} '
+                    f'<i>{_r.get("team", "")} v {_r.get("opponent", "")}'
+                    f'{_bat}</i>{form_chip(_r)}{_same}</div>'
+                    f'<div class="v">{pct(_r[bet_prop])}</div></div>')
+                _lines.append(
+                    f'  {_r["name"]} ({_r.get("team", "")}) — '
+                    f'{props[bet_prop][0]} — {pct(_r[bet_prop])}'
+                    + ("" if _solo else "   [same game]"
+                       if _picked["game_pk"].tolist().count(_r["game_pk"]) > 1
+                       else ""))
+
+            _blocks += (
+                f'<div class="sp-find" style="padding:13px 15px">'
+                f'<div class="kind" style="color:var(--accent)">{_label}</div>'
+                f'<div class="txt" style="margin:2px 0 8px">{_ngames} game'
+                f'{"s" if _ngames != 1 else ""} in this window'
+                + ('<span style="color:var(--warn)"> — one game, so every '
+                   'leg here is correlated</span>' if _solo else '') + '</div>'
+                f'<div class="sp-lb">{_rows}</div></div>')
+            _lines.append("")
+
+        if not _blocks:
+            html(f'<div class="sp-empty">No leg clears '
+                 f'{bet_floor:.0%} on this prop tonight.<br>'
+                 f'<span style="color:var(--ink3);font-size:12px">'
+                 f'Lower the minimum, or pick a prop with a higher base '
+                 f'rate — a 50% floor on a home run is asking for '
+                 f'something that does not exist.</span></div>')
+        else:
+            html(f'<div class="sp-read">{_blocks}</div>')
+
+            if _warn_any:
+                html('<div style="margin:4px 0 14px;font-size:12.5px;'
+                     'color:var(--b2ink);line-height:1.55">'
+                     '<b>Some windows have two legs from one game.</b> Those '
+                     'are not independent — same pitcher, same park, same '
+                     'night — so the true chance of both landing is HIGHER '
+                     'than multiplying them suggests, and a book pricing '
+                     'them as independent is paying you less than the '
+                     'correlation is worth. Kept rather than dropped '
+                     'because you may want them; just do not read the '
+                     'product as the real number.</div>')
+
+            _txt = "\n".join(_lines).strip()
+            html('<div style="font-size:13px;font-weight:620;color:var(--ink);'
+                 'margin-top:6px">Copy</div>')
+            st.code(_txt, language=None)
+            html('<div style="margin-top:8px;font-size:12px;'
+                 'color:var(--ink3);line-height:1.55">'
+                 'Probabilities are the model\'s, and the model is not a '
+                 'price. A leg at 62% is worth taking only against odds '
+                 'longer than 62% implies, and the one tab that compares '
+                 'the two is <b style="color:var(--ink2)">Pitchers</b>, '
+                 'where a captured line exists to compare against. There is '
+                 'no hitter-prop odds capture — player props are charged '
+                 'per event and the budget goes to strikeouts.</div>')
+
+
 with tab_res:
     html('<div style="font-size:15px;font-weight:640;color:var(--ink);'
          'margin-bottom:14px">How the model has done</div>')
@@ -2467,7 +2973,35 @@ with tab_res:
             pred = float((sub[pc] * sub["n"]).sum() / w.sum())
             act = float((sub[ac] * sub["n"]).sum() / w.sum())
             gap = pred - act
-            colour = "var(--ink2)" if abs(gap) < 0.75 else "var(--warn)"
+
+            # How sure is that gap? Without this the row reads as a
+            # finding whatever it says, and the strikeout gap in
+            # September 2026 was -0.34 at t = -2.36 -- real enough to
+            # watch, nowhere near enough to correct for. A constant offset
+            # fitted to thirteen September dates would also be fitting
+            # expanded rosters and innings management, and would be wrong
+            # in April.
+            #
+            # The standard error is taken ACROSS SLATES, not across
+            # starts. Starts on one night share a weather system, an
+            # umpire crew and a league-wide pattern of bullpen use, so
+            # treating them as independent understates the error by
+            # roughly the square root of the starts per night.
+            per = (sub[pc] - sub[ac]).to_numpy(dtype=float)
+            se = float("nan")
+            if len(per) >= 3:
+                var = float(((w * (per - gap) ** 2).sum() / w.sum())
+                            * len(per) / max(len(per) - 1, 1))
+                se = (var / len(per)) ** 0.5
+            solid = pd.notna(se) and se > 0 and abs(gap) > 2 * se
+            colour = "var(--warn)" if solid and abs(gap) >= 0.75 else (
+                "var(--ink2)" if not solid else "var(--ink)")
+            tail = (f' <span style="color:var(--ink3)">±{se:.2f}</span>'
+                    if pd.notna(se) else "")
+            verdict = ("" if pd.isna(se) else
+                       ' <span style="color:var(--ink3);font-size:11px">'
+                       + ("real" if solid else "not yet separable from noise")
+                       + '</span>')
             cells += (
                 f'<div style="display:flex;justify-content:space-between;'
                 f'gap:14px;padding:3px 0;font-size:12.5px">'
@@ -2475,7 +3009,8 @@ with tab_res:
                 f'<span style="font-variant-numeric:tabular-nums">'
                 f'projected <b style="color:var(--ink)">{pred:.2f}</b> · '
                 f'actual <b style="color:var(--ink)">{act:.2f}</b> · '
-                f'<b style="color:{colour}">{gap:+.2f}</b></span></div>')
+                f'<b style="color:{colour}">{gap:+.2f}</b>{tail}{verdict}'
+                f'</span></div>')
         if cells:
             html(f'<div style="margin-top:16px;border:1px solid var(--line);'
                  f'border-radius:10px;padding:11px 14px;max-width:520px">'
@@ -2499,4 +3034,11 @@ with tab_res:
              f'every line and still be projecting starters a full inning '
              f'too deep. Both props are built on the same estimate of how '
              f'long a starter lasts, so when that drifts they drift '
-             f'together.</div>')
+             f'together.<br>'
+             f'The <b style="color:var(--ink2)">±</b> is measured across '
+             f'slates rather than across starts, because fifteen starters '
+             f'on one night share a league-wide pattern of bullpen use and '
+             f'are not fifteen independent draws. A gap marked '
+             f'<i>not yet separable from noise</i> is not a number to '
+             f'correct for — it is a number to keep watching, and this row '
+             f'is the thing that will eventually say so.</div>')

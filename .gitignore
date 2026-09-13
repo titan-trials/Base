@@ -45,6 +45,17 @@ cache/*
 # Read by the Pitchers tab. One row per starter per slate, ~5 KB a night.
 !cache/pitchers_*.csv
 
+# Recent form for tonight's starters -- last ten starts each, with pitch
+# count, batters faced, strikeouts and home/away. Written by
+# pitcher_form.py, read by the Pitchers tab.
+#
+# This exists PRECISELY BECAUSE the statcast caches below are untracked.
+# The game log it summarises lives in cache/statcast_pitcher_*.csv, which
+# is 1.2 GB and stays out of git forever. The deployed app therefore
+# cannot compute this itself, and the same rule as always applies: if the
+# dashboard reads it, it has to be tracked. ~25 KB a night.
+!cache/pitcher_form_*.csv
+
 # Accumulating records. Neither is regenerable: rescoring an old date needs
 # that date's prediction file AND the Statcast pull behind it, and the
 # whole value is that they add one honest out-of-sample row per night.

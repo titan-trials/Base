@@ -113,6 +113,29 @@ BF_PRIOR_STARTS = 4.7
 # pitchers on the market comparison came from.
 NEW_PITCHER_MAX_PRIOR = 2
 
+# Shrinkage for a RELIEVER who has been named a probable, in appearances.
+#
+# Measured 2026-09-13 on cache/pitcher_row_log.csv. Twenty starts were made
+# by a pitcher with no starting history in the window, and the projection
+# for them averaged 22.6 batters faced against an actual 10.4 -- by far the
+# largest error in the model, more than four times any other bucket.
+#
+# The names say why, and they are not one population:
+#
+#   Derek Law 6 batters, Tim Mayza 9, Bryan Hudson 5, Taylor Clarke 6,
+#   Trevor Williams 3, Braydon Fisher 3, Miguel Ullola 3, Sean Newcomb 6
+#       -- relievers working an opener or bulk game
+#
+#   Jedixson Paez 23, Andrew Sears 23, Cesar Perdomo 20, Christian Scott 19
+#       -- genuine debut STARTERS, and the new-pitcher prior handles these
+#          correctly already
+#
+# A reliever named as a probable is functionally an opener, so the right
+# reference group is the opener population, not the starter one. Twelve
+# appearances, because relief workload is a manager's decision about a
+# ROLE and settles faster than how deep a starter is allowed to go.
+RELIEF_PRIOR_APPEARANCES = 12.0
+
 # Shrinkage for a pitcher's strikeout rate, in batters faced. Roughly ten
 # starts before his own rate outweighs the league's -- strikeout ability is
 # a real and fairly stable skill, but a handful of starts is still mostly
@@ -530,6 +553,28 @@ class WorkloadModel:
         model.opener_k_rate = (float(openers["k"].sum() / openers["bf"].sum())
                                if len(openers) >= 30
                                and openers["bf"].sum() > 0 else float("nan"))
+        # The SHAPE of a short outing, not just its mean. See bf_pmf --
+        # tilting the starter pmf toward 7 batters cannot work, because
+        # its support bottoms out around 13. Built from opener starts and
+        # relief appearances together: both are short outings, and using
+        # openers alone leaves the support too narrow to tilt a 4-batter
+        # reliever onto.
+        short = [openers["bf"]]
+        if appearances is not None and len(appearances):
+            _a = appearances.copy()
+            _a["game_date"] = pd.to_datetime(_a["game_date"])
+            if as_of is not None:
+                _a = _a[(_a["game_date"] >= cutoff) & (_a["game_date"] < as_of)]
+            if len(_a):
+                short.append(_a.loc[~_a["is_start"], "bf"])
+        short_bf = pd.concat(short, ignore_index=True).dropna()
+        if len(short_bf) >= 30:
+            oc = short_bf.value_counts().sort_index()
+            model.opener_support = oc.index.to_numpy(dtype=float)
+            model.opener_pmf = (oc / oc.sum()).to_numpy(dtype=float)
+        else:
+            model.opener_support = model.opener_pmf = None
+
         o_outs = openers["outs"].dropna() if "outs" in openers else pd.Series(dtype=float)
         model.opener_mean_outs = (float(o_outs.mean())
                                   if len(o_outs) >= 30 else float("nan"))
@@ -579,6 +624,60 @@ class WorkloadModel:
                 model.relief_bf = (app[~app["is_start"]].groupby("pitcher")["bf"]
                                    .mean().to_dict())
 
+        # ---- relievers named as probables --------------------------
+        #
+        # The third tier, and the one that was missing. `relief_bf` was
+        # already being computed here and then never read by anything:
+        # expected_bf consulted his real starts, then his opener starts,
+        # then gave up and returned the STARTER prior. A pitcher whose
+        # entire cached history is relief work has neither of the first
+        # two, so he got 22.6 batters -- see RELIEF_PRIOR_APPEARANCES.
+        #
+        # Riley Cornelio, 2026-09-13, is the case that exposed it: the
+        # model classified him `role = "reliever"` with 13 appearances
+        # seen, printed that classification into the slate file, and then
+        # projected him for 22.65 batters faced anyway. Knowing a thing
+        # and using it are separate, and only one of them was true.
+        #
+        # His own relief outings are shrunk toward the OPENER mean rather
+        # than his own relief mean, because a reliever handed a probable
+        # start goes longer than his usual inning -- he is being used as
+        # an opener, and that is the population he belongs to tonight.
+        model.relief_only = {}
+        if (model.relief_bf and np.isfinite(model.opener_mean_bf)
+                and appearances is not None):
+            relief = app[~app["is_start"]] if len(app) else app
+            counts = relief.groupby("pitcher").size() if len(relief) else {}
+            for pid, own in model.relief_bf.items():
+                # A real starter, or one with opener starts to use, is
+                # already better served upstream. Only true relief-only
+                # arms land here.
+                if pid in has_real_start or pid in model.opener_only:
+                    continue
+                m = float(counts.get(pid, 0))
+                if m <= 0 or not np.isfinite(own):
+                    continue
+                entry = {"n": int(m), "bf": float(
+                    (own * m + model.opener_mean_bf * RELIEF_PRIOR_APPEARANCES)
+                    / (m + RELIEF_PRIOR_APPEARANCES))}
+                if np.isfinite(model.opener_k_rate):
+                    entry["k_rate"] = model.opener_k_rate
+                if np.isfinite(model.opener_mean_outs):
+                    # Outs track batters faced; scale the opener figure by
+                    # how his workload compares rather than inventing a
+                    # second, separately-shrunk estimate that could
+                    # disagree with the first.
+                    entry["outs"] = float(model.opener_mean_outs
+                                          * entry["bf"] / model.opener_mean_bf)
+                model.relief_only[pid] = entry
+            if verbose and model.relief_only:
+                mean_bf = np.mean([e["bf"] for e in model.relief_only.values()])
+                print(f"    {len(model.relief_only)} pitcher(s) have relief "
+                      f"appearances but no start in the window; projected at "
+                      f"{mean_bf:.1f} batters from their relief workload "
+                      f"rather than the {league_mean:.1f}-batter starter "
+                      f"prior.")
+
         if verbose and model.opener_only:
             ex = len(model.opener_only)
             print(f"    {ex} pitcher(s) have only opener-length starts in "
@@ -593,11 +692,28 @@ class WorkloadModel:
         return model
 
     def _opener_entry(self, pitcher_id):
-        return getattr(self, "opener_only", {}).get(pitcher_id)
+        """
+        The best non-starter evidence about this pitcher, or None.
+
+        Two dictionaries, checked in order of how much they say:
+
+          opener_only   he has STARTED, opener-length, in the window.
+                        Those are starts, on the right night, in the right
+                        role -- the closest thing to tonight there is.
+          relief_only   he has never started. His relief workload, shrunk
+                        toward the opener population, is all there is.
+
+        Both are populated only for pitchers with no real start, so they
+        never override a starter's own history.
+        """
+        entry = getattr(self, "opener_only", {}).get(pitcher_id)
+        if entry is not None:
+            return entry
+        return getattr(self, "relief_only", {}).get(pitcher_id)
 
     def expected_bf(self, pitcher_id) -> float:
-        # His own opener starts beat the starter prior whenever he has
-        # them, and he only lands here if he has NO real start to use.
+        # His own opener or relief work beats the starter prior whenever
+        # he has any, and he only lands there if he has NO real start.
         entry = self._opener_entry(pitcher_id)
         if entry and "bf" in entry:
             return float(entry["bf"])
@@ -640,9 +756,14 @@ class WorkloadModel:
         """starter | opener | reliever | unknown -- display only."""
         if pitcher_id in getattr(self, "pitcher_starts", {}):
             return "starter"
-        if self._opener_entry(pitcher_id):
+        # opener_only specifically, NOT _opener_entry -- that now also
+        # covers relief-only arms, and calling one an opener because the
+        # projection borrows the opener mean would report the fix rather
+        # than the pitcher. He has never started; he is a reliever.
+        if pitcher_id in getattr(self, "opener_only", {}):
             return "opener"
-        if self.appearances_seen(pitcher_id) >= 10:
+        if (pitcher_id in getattr(self, "relief_only", {})
+                or self.appearances_seen(pitcher_id) >= 10):
             return "reliever"
         return "unknown"
 
@@ -700,8 +821,32 @@ class WorkloadModel:
         return self.expected_bf(pitcher_id) - self.expected_outs(pitcher_id)
 
     def bf_pmf(self, pitcher_id) -> tuple:
-        """(support, probabilities) for how many batters he faces tonight."""
+        """
+        (support, probabilities) for how many batters he faces tonight.
+
+        The SHAPE has to come from the right population, not just the
+        mean. `self.league_pmf` is fitted on non-opener starts, so its
+        support starts around thirteen batters -- exponential tilting
+        cannot pull a distribution below its own support, it can only
+        pile mass on the bottom point.
+
+        That silently broke both short-outing tiers. An opener projected
+        at 7.0 batters got a distribution whose mean was 13.0, and every
+        strikeout probability on the slate came off the 13, because
+        k_count_distribution reads THIS, not expected_bf. The headline
+        number and the column beside it disagreed by six batters and
+        nothing said so.
+
+        So a pitcher with an opener or relief entry gets the opener
+        population's shape, tilted to his own mean. A test asserting the
+        pmf mean equals expected_bf is what caught it; keep it.
+        """
         target = self.expected_bf(pitcher_id)
+        if self._opener_entry(pitcher_id) is not None:
+            support = getattr(self, "opener_support", None)
+            pmf = getattr(self, "opener_pmf", None)
+            if support is not None and pmf is not None and len(support):
+                return support, _tilt_pmf(support, pmf, target)
         return self.support, _tilt_pmf(self.support, self.league_pmf, target)
 
 
