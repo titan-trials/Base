@@ -2472,145 +2472,411 @@ render_picks_panel(df, props, cuts)
 # -------------------------------------------------------------- results
 # ------------------------------------------------------------- bet ready
 #
-# Nolan: "games get posted around like the same time for a set of games...
-# is there any way maybe we can make a list on the... be like, hey, bet
-# ready, parlay, you can just copy."
+# Nolan asked for two things here, three weeks apart, and the second one
+# changed the shape of the first.
 #
-# Games really do cluster. The 2026-09-12 slate was fifteen games in eight
-# windows at a 30-minute threshold, with five of them between 4:05 and
-# 4:10 PM. The grouping is the whole feature; the rest is saying honestly
-# what the legs in a group are worth together, which is NOT the product of
-# their probabilities.
+#   "games get posted around like the same time for a set of games...
+#    maybe we can make a list, be like, hey, bet ready, parlay"
+#
+#   "is there any way to have a combination of stuff... player x has a
+#    really high hit, and player b has a really good hit run RBI. Not
+#    necessarily the highest it can be, but like, oh, this is kinda a
+#    pretty easy hit... medium hit, kinda risky... and then kinda like a
+#    lotto pick"
+#
+# So: games clustered by first pitch, and within each window a TICKET that
+# mixes risk deliberately rather than three copies of the safest thing.
+#
+# THE TIERS, AND WHY THEY ARE RANKED DIFFERENTLY
+# ----------------------------------------------
+# A leg's absolute probability is what decides whether it hits, and -- with
+# no hitter odds anywhere in this project -- it is also the only proxy for
+# what it pays. So the tiers are cut on probability.
+#
+# But ranking WITHIN a tier wants a different number in each:
+#
+#   SAFE    ranked by probability. You want the surest thing; there is
+#           almost nothing to choose between players here anyway. The best
+#           bat on the board for H+R+RBI 0.5 is 80.1% against a 66.6%
+#           median -- 1.2x the field.
+#
+#   MEDIUM  ranked by LIFT over the slate median for that prop. In the
+#           middle of the board probability alone just re-sorts by which
+#           prop has the higher base rate, which is not a fact about the
+#           player.
+#
+#   LOTTO   ranked by lift, and this is where lift earns its keep. The
+#           low-base-rate props spread enormously: home run runs 10.6%
+#           median against a 39.3% best, 3.7x, and TB 3.5 is 2.8x. A 12%
+#           home run is the field; a 39% home run is a different claim.
+#
+# WHY NOT "MARKET DISAGREEMENT" FOR THE LOTTO TIER
+# ------------------------------------------------
+# Because there is none to read. The only market this project captures is
+# pitcher_strikeouts -- player props are charged per event and the free
+# tier is 500 credits a month, so the budget goes to strikeouts. Every
+# hitter number on this page is model-only, and "the model likes him far
+# more than it likes a typical player" is the honest stand-in.
+#
+# The one place a real edge exists is a pitcher, so a pitcher leg is added
+# to the ticket as its own line, carrying the measured number rather than
+# competing with hitters on a scale that would have to be invented to make
+# them comparable.
 with tab_bet:
     html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
          'Bet ready</div><div style="color:var(--ink3);font-size:12.5px;'
-         'margin-bottom:14px">Tonight\'s board split into first-pitch '
-         'windows, strongest legs first, in a form you can copy.</div>')
+         'margin-bottom:14px">One ticket per first-pitch window, mixing a '
+         'near-certainty, a live middle leg and a long shot the model likes '
+         'far more than the field.</div>')
 
-    _bl, _bm, _br = st.columns([2, 1, 1])
-    with _bl:
-        bet_prop = st.selectbox(
-            "Prop", list(props),
-            index=list(props).index(DEFAULT_PROP) if DEFAULT_PROP in props else 0,
-            format_func=lambda c: props[c][0], key="bet_prop")
-    with _bm:
-        bet_n = st.selectbox("Legs per window", [1, 2, 3, 4, 5], index=2,
-                             key="bet_n")
-    with _br:
-        bet_floor = st.selectbox("Minimum", [0.0, 0.4, 0.5, 0.6, 0.7],
-                                 index=2, format_func=lambda v: f"{v:.0%}",
-                                 key="bet_floor")
+    # Cut points. Chosen against the real spread of the props rather than
+    # picked round: 0.58 sits above every prop's median except the two
+    # "over 0.5" ones, and 0.28 sits below every median except the genuine
+    # long shots (HR, TB 2.5+, hits 1.5+, H+R+RBI 3.5).
+    SAFE_MIN, LOTTO_MAX = 0.58, 0.28
+    MIN_BOOKS_BET = 4
+    # At or below this the market is pricing a short outing, which is
+    # exactly where the model's compression makes it read high. A positive
+    # edge here is the bias, not a find -- see the Pitchers tab footnote.
+    LOW_LINE = 4.5
 
-    _bd = df.dropna(subset=[bet_prop, "start"]).copy()
-    if _bd.empty:
-        html('<div class="sp-empty">Nothing to show for this prop.</div>')
+    _bd = df.dropna(subset=["start"]).copy()
+    if _bd.empty or not props:
+        html('<div class="sp-empty">Nothing to build a ticket from.</div>')
     else:
         # Cluster on first pitch. A 30-minute gap is the break: 4:05 and
-        # 4:10 are the same window, 4:10 and 6:10 are not.
+        # 4:10 are one window, 4:10 and 6:10 are not.
         _starts = (_bd.drop_duplicates("game_pk")[["game_pk", "start"]]
                       .sort_values("start"))
-        _gap = _starts["start"].diff() > pd.Timedelta(minutes=30)
-        _starts["window"] = _gap.cumsum()
-        _bd = _bd.merge(_starts[["game_pk", "window"]], on="game_pk")
+        _starts["window"] = (_starts["start"].diff()
+                             > pd.Timedelta(minutes=30)).cumsum()
+        _win = dict(zip(_starts["game_pk"], _starts["window"]))
 
-        _lines, _blocks, _warn_any = [], "", False
-        for _w, _g in _bd.groupby("window"):
-            _picked = (_g[_g[bet_prop] >= bet_floor]
-                       .nlargest(int(bet_n), bet_prop))
-            if _picked.empty:
+        # ---- every hitter leg, one row per (player, prop) --------------
+        _med = {k: float(df[k].median()) for k in props
+                if pd.notna(df[k].median()) and float(df[k].median()) > 0}
+        _legs = []
+        for _k in props:
+            if _k not in _med:
                 continue
-            _t0, _t1 = _g["start"].min(), _g["start"].max()
-            _label = (fmt_clock(_t0) if _t0 == _t1
-                      else f"{fmt_clock(_t0)} – {fmt_clock(_t1)}")
-            _ngames = _g["game_pk"].nunique()
+            _col = pd.to_numeric(_bd[_k], errors="coerce")
+            _ok = _col.notna() & (_col > 0)
+            if not _ok.any():
+                continue
+            _sub = _bd.loc[_ok, ["name", "team", "opponent", "game_pk",
+                                 "lineup_slot"]].copy()
+            _sub["p"] = _col[_ok]
+            _sub["lift"] = _sub["p"] / _med[_k]
+            _sub["prop"] = props[_k][0]
+            _sub["base"] = _med[_k]
+            _sub["kind"] = "bat"
+            _sub["extra"] = ""
+            _legs.append(_sub)
+        _legs = (pd.concat(_legs, ignore_index=True) if _legs
+                 else pd.DataFrame())
 
-            # Two legs from one lineup rise and fall together -- the same
-            # pitcher, the same park, the same night. Multiplying their
-            # probabilities understates the true joint chance, so a parlay
-            # priced as independent pays less than the risk deserves. The
-            # answer here is to say so, not to silently drop a leg the
-            # user might want.
-            # In a window with ONE game every leg is same-game by
-            # definition, so flagging each of them separately is noise --
-            # three identical warnings that say nothing the window header
-            # does not. Mark the window instead, and reserve the per-leg
-            # flag for windows where it actually distinguishes rows.
-            _solo = _ngames == 1
-            _dupe = _picked["game_pk"].duplicated(keep=False)
-            _warn_any |= bool(_dupe.any())
+        # ---- pitcher legs, recomputed here on purpose ------------------
+        #
+        # NOT read off pit_view. This is a flat script: pit_view only
+        # exists inside a conditional in the Pitchers tab, and reaching
+        # across for it is the exact pattern that has broken a tab in this
+        # file twice. Recomputing from `pit` costs nothing.
+        _plegs = pd.DataFrame()
+        if (pit is not None and not pit.empty and "k_dist" in pit.columns
+                and "game_pk" in pit.columns):
+            _m = market_lines(slate_date)
+            _rows = []
+            for _, _r in pit.iterrows():
+                _hit = _m.get(str(_r.get("pitcher")))
+                if not _hit or _hit[2] < MIN_BOOKS_BET:
+                    continue          # no real line; nothing to bet against
+                _line, _mp, _bk = _hit
+                _p = prob_over(parse_pmf(_r.get("k_dist")), _line)
+                if not pd.notna(_p):
+                    continue
+                _rows.append({
+                    "name": _r.get("pitcher"), "team": _r.get("team"),
+                    "opponent": _r.get("opponent"),
+                    "game_pk": _r.get("game_pk"), "lineup_slot": pd.NA,
+                    "p": _p, "lift": float("nan"),
+                    "prop": f"Over {_line:.1f} K", "base": _mp,
+                    "line": _line, "kind": "arm", "extra": _p - _mp})
+            _plegs = pd.DataFrame(_rows)
 
-            _rows = ""
-            # The pasted text has to stand on its own -- a bare list of
-            # names loses which window each leg belongs to, which is the
-            # only reason this tab groups them in the first place.
-            _lines.append(f"{_label}  ({_ngames} game"
-                          f"{'s' if _ngames != 1 else ''}"
-                          f"{' — every leg correlated' if _solo else ''})")
-            for _, _r in _picked.iterrows():
-                _slot = _r.get("lineup_slot")
-                _bat = (f' · bats {ORDINAL.get(int(_slot), int(_slot))}'
-                        if pd.notna(_slot) else "")
-                _same = ('' if _solo else
-                         ' <span style="color:var(--warn)">same game</span>'
-                         if _picked["game_pk"].tolist().count(_r["game_pk"]) > 1
-                         else "")
-                _rows += (
-                    f'<div class="r"><div class="w">{_r["name"]} '
-                    f'<i>{_r.get("team", "")} v {_r.get("opponent", "")}'
-                    f'{_bat}</i>{form_chip(_r)}{_same}</div>'
-                    f'<div class="v">{pct(_r[bet_prop])}</div></div>')
-                _lines.append(
-                    f'  {_r["name"]} ({_r.get("team", "")}) — '
-                    f'{props[bet_prop][0]} — {pct(_r[bet_prop])}'
-                    + ("" if _solo else "   [same game]"
-                       if _picked["game_pk"].tolist().count(_r["game_pk"]) > 1
-                       else ""))
-
-            _blocks += (
-                f'<div class="sp-find" style="padding:13px 15px">'
-                f'<div class="kind" style="color:var(--accent)">{_label}</div>'
-                f'<div class="txt" style="margin:2px 0 8px">{_ngames} game'
-                f'{"s" if _ngames != 1 else ""} in this window'
-                + ('<span style="color:var(--warn)"> — one game, so every '
-                   'leg here is correlated</span>' if _solo else '') + '</div>'
-                f'<div class="sp-lb">{_rows}</div></div>')
-            _lines.append("")
-
-        if not _blocks:
-            html(f'<div class="sp-empty">No leg clears '
-                 f'{bet_floor:.0%} on this prop tonight.<br>'
-                 f'<span style="color:var(--ink3);font-size:12px">'
-                 f'Lower the minimum, or pick a prop with a higher base '
-                 f'rate — a 50% floor on a home run is asking for '
-                 f'something that does not exist.</span></div>')
+        if _legs.empty:
+            html('<div class="sp-empty">No legs on this slate.</div>')
         else:
-            html(f'<div class="sp-read">{_blocks}</div>')
+            _legs["window"] = _legs["game_pk"].map(_win)
+            _legs = _legs.dropna(subset=["window"])
+            if not _plegs.empty:
+                _plegs["window"] = _plegs["game_pk"].map(_win)
+                _plegs = _plegs.dropna(subset=["window"])
 
-            if _warn_any:
+            def tier_of(p):
+                return ("SAFE" if p >= SAFE_MIN
+                        else "LOTTO" if p < LOTTO_MAX else "MEDIUM")
+
+            _legs["tier"] = _legs["p"].map(tier_of)
+
+            TIERS = [
+                ("SAFE", "var(--b4)", "p",
+                 "the surest thing in this window"),
+                ("MEDIUM", "var(--accent)", "lift",
+                 "live, and well clear of the field"),
+                ("LOTTO", "var(--b2ink)", "lift",
+                 "long odds, and the model likes him far more than a "
+                 "typical bat in this prop"),
+            ]
+
+            # ---- build every ticket ONCE ----------------------------
+            #
+            # Cards and copy text both render from this. An earlier draft
+            # picked the legs twice -- once per renderer -- which works
+            # until two legs tie on the ranking key and the two views
+            # disagree about which one is on the ticket.
+            def build(window, group):
+                """
+                Greedy, safest first.
+
+                TWO exclusions, and the first one matters far more than it
+                looks. A first draft only avoided reusing a GAME, and
+                produced this ticket:
+
+                    SAFE    Yandy Diaz  Hit        73.2%
+                    MEDIUM  Yandy Diaz  Hits 1.5   33.1%
+                    LOTTO   Yandy Diaz  Hits 2.5   10.0%
+
+                That is not a parlay. The props are NESTED -- two hits
+                implies one hit implies a hit -- so the three legs are one
+                bet wearing three labels, and its true probability is the
+                smallest of them, not the product. A home run implies
+                H+R+RBI 0.5 the same way. Excluding the player entirely is
+                the only rule that is safe without hard-coding which props
+                imply which, and a ticket wants different players anyway.
+
+                Games are avoided second, and only as a preference: a
+                one-game window has nothing to swap in, so the clash is
+                flagged rather than treated as an error.
+                """
+                used_games, used_names, legs = set(), set(), []
+                for tname, colour, by, why in TIERS:
+                    pool = group[(group["tier"] == tname)
+                                 & (~group["name"].isin(used_names))]
+                    if pool.empty:
+                        legs.append({"tier": tname, "colour": colour,
+                                     "row": None, "clash": False})
+                        continue
+                    fresh = pool[~pool["game_pk"].isin(used_games)]
+                    clash = fresh.empty
+                    best = (pool if clash else fresh).nlargest(1, by).iloc[0]
+                    used_games.add(best["game_pk"])
+                    used_names.add(best["name"])
+                    legs.append({"tier": tname, "colour": colour,
+                                 "row": best, "clash": clash})
+                arm = None
+                if not _plegs.empty:
+                    pw = _plegs[_plegs["window"] == window].copy()
+                    if not pw.empty:
+                        # Ranked by measured edge -- for a pitcher that
+                        # number is real, and lines sit near the coin flip
+                        # by construction so probability barely reorders.
+                        #
+                        # But NOT by raw magnitude. The model's biggest
+                        # positive edges are systematically its least
+                        # real: measured over 202 pitcher-nights it moves
+                        # 0.67 strikeouts for every 1 the market moves, so
+                        # it reads high on short-outing arms, and a book
+                        # posting 3.5 on a starter is pricing a pitch
+                        # limit or a bullpen game the model cannot see.
+                        # Sorting by magnitude alone put a +35.6% OVER at
+                        # a 3.5 line at the top of a ticket.
+                        #
+                        # So a low-line OVER sorts last and is chosen only
+                        # when the window offers nothing else, with the
+                        # reason shown on the leg.
+                        pw["suspect"] = ((pw["extra"].astype(float) > 0)
+                                         & (pw["line"] <= LOW_LINE))
+                        pw["rank"] = pw["extra"].astype(float).abs()
+                        arm = pw.sort_values(["suspect", "rank"],
+                                             ascending=[True, False]).iloc[0]
+                return legs, arm
+
+            _tickets = []
+            for _w, _g in _legs.groupby("window"):
+                _wg = _bd[_bd["game_pk"].isin(_g["game_pk"])]
+                _t0, _t1 = _wg["start"].min(), _wg["start"].max()
+                _legs_w, _arm = build(_w, _g)
+                _games_n = int(_wg["game_pk"].nunique())
+                _tickets.append({
+                    "label": (fmt_clock(_t0) if _t0 == _t1
+                              else f"{fmt_clock(_t0)} – {fmt_clock(_t1)}"),
+                    "games": _games_n,
+                    # In a one-game window every leg is same-game by
+                    # definition, so a per-leg flag prints the same warning
+                    # three times and says nothing the header does not.
+                    # Mark the window; keep the per-leg flag for windows
+                    # where it actually distinguishes rows.
+                    "solo": _games_n == 1,
+                    "legs": _legs_w, "arm": _arm})
+
+            _corr_any = any(l["clash"] for t in _tickets
+                            for l in t["legs"] if not t["solo"])
+            _solo_any = any(t["solo"] for t in _tickets)
+
+            # ---- cards ----------------------------------------------
+            _cards = ""
+            for _t in _tickets:
+                _rows_html = ""
+                for _l in _t["legs"]:
+                    if _l["row"] is None:
+                        _rows_html += (
+                            f'<div style="display:flex;gap:10px;padding:6px 0;'
+                            f'border-top:1px solid var(--line);'
+                            f'font-size:12.5px">'
+                            f'<span style="color:{_l["colour"]};'
+                            f'font-weight:640;min-width:64px">{_l["tier"]}'
+                            f'</span><span style="color:var(--ink3)">nothing '
+                            f'in this window clears the bar</span></div>')
+                        continue
+                    _b = _l["row"]
+                    _slot = _b.get("lineup_slot")
+                    _bat = (f' · bats {ORDINAL.get(int(_slot), int(_slot))}'
+                            if pd.notna(_slot) else "")
+                    _lifttxt = (f'{_b["lift"]:.1f}× the {_b["base"]:.0%} '
+                                f'slate median' if pd.notna(_b["lift"]) else "")
+                    _same = (' · <span style="color:var(--warn)">same game as '
+                             'a leg above</span>'
+                             if _l["clash"] and not _t["solo"] else "")
+                    _rows_html += (
+                        f'<div style="padding:7px 0;border-top:1px solid '
+                        f'var(--line)">'
+                        f'<div style="display:flex;gap:10px;'
+                        f'align-items:baseline">'
+                        f'<span style="color:{_l["colour"]};font-weight:640;'
+                        f'font-size:11px;letter-spacing:.08em;'
+                        f'min-width:64px">{_l["tier"]}</span>'
+                        f'<span style="font-weight:600;color:var(--ink);'
+                        f'font-size:13px">{_b["name"]}</span>'
+                        f'<span style="color:var(--ink3);font-size:12px">'
+                        f'{_b["team"]} v {_b["opponent"]}{_bat}</span>'
+                        f'<span style="margin-left:auto;font-weight:640;'
+                        f'color:var(--ink)">{pct(_b["p"])}</span></div>'
+                        f'<div style="font-size:11.5px;color:var(--ink3);'
+                        f'padding-left:74px">{_b["prop"]} · {_lifttxt}'
+                        f'{_same}</div></div>')
+                if _t["arm"] is not None:
+                    _a = _t["arm"]
+                    _e = float(_a["extra"])
+                    _ecol = ("var(--b4)" if _e >= 0.05 else
+                             "var(--b1ink)" if _e <= -0.05 else "var(--ink3)")
+                    _rows_html += (
+                        f'<div style="padding:7px 0;border-top:1px solid '
+                        f'var(--line)">'
+                        f'<div style="display:flex;gap:10px;'
+                        f'align-items:baseline">'
+                        f'<span style="color:var(--ink2);font-weight:640;'
+                        f'font-size:11px;letter-spacing:.08em;'
+                        f'min-width:64px">ARM</span>'
+                        f'<span style="font-weight:600;color:var(--ink);'
+                        f'font-size:13px">{_a["name"]}</span>'
+                        f'<span style="color:var(--ink3);font-size:12px">'
+                        f'{_a["team"]} v {_a["opponent"]}</span>'
+                        f'<span style="margin-left:auto;font-weight:640;'
+                        f'color:var(--ink)">{pct(_a["p"])}</span></div>'
+                        f'<div style="font-size:11.5px;color:var(--ink3);'
+                        f'padding-left:74px">{_a["prop"]} · market '
+                        f'{_a["base"]:.0%} · <b style="color:{_ecol}">'
+                        f'{_e:+.1%} {"OVER" if _e > 0 else "UNDER"}</b> — the '
+                        f'only measured edge on this page</div></div>')
+                _cards += (
+                    f'<div class="sp-find" style="padding:13px 15px">'
+                    f'<div class="kind" style="color:var(--accent)">'
+                    f'{_t["label"]}</div>'
+                    f'<div class="txt" style="margin:2px 0 2px">'
+                    f'{_t["games"]} game{"s" if _t["games"] != 1 else ""} in '
+                    f'this window'
+                    + ('<span style="color:var(--warn)"> — one game, so '
+                       'every leg here is correlated</span>'
+                       if _t["solo"] else '')
+                    + f'</div>{_rows_html}</div>')
+
+            # ---- the same tickets, as pasteable text ------------------
+            _copy = []
+            for _t in _tickets:
+                _copy.append(f'{_t["label"]}  ({_t["games"]} game'
+                             f'{"s" if _t["games"] != 1 else ""}'
+                             f'{" — every leg correlated" if _t["solo"] else ""})')
+                for _l in _t["legs"]:
+                    if _l["row"] is None:
+                        _copy.append(f'  {_l["tier"]:<7} —')
+                        continue
+                    _b = _l["row"]
+                    _copy.append(
+                        f'  {_l["tier"]:<7} {_b["name"]} ({_b["team"]}) — '
+                        f'{_b["prop"]} — {pct(_b["p"])}'
+                        + (f'   {_b["lift"]:.1f}x field'
+                           if pd.notna(_b["lift"]) else "")
+                        + ("   [same game as a leg above]"
+                           if _l["clash"] and not _t["solo"] else ""))
+                if _t["arm"] is not None:
+                    _a = _t["arm"]
+                    _copy.append(
+                        f'  ARM     {_a["name"]} ({_a["team"]}) — '
+                        f'{_a["prop"]} — {pct(_a["p"])}   market '
+                        f'{_a["base"]:.0%}, {float(_a["extra"]):+.1%}'
+                        + ("   [low line — likely the model's bias]"
+                           if bool(_a.get("suspect")) else ""))
+                _copy.append("")
+
+            html(f'<div class="sp-read">{_cards}</div>')
+
+            if _corr_any or _solo_any:
                 html('<div style="margin:4px 0 14px;font-size:12.5px;'
                      'color:var(--b2ink);line-height:1.55">'
-                     '<b>Some windows have two legs from one game.</b> Those '
-                     'are not independent — same pitcher, same park, same '
-                     'night — so the true chance of both landing is HIGHER '
-                     'than multiplying them suggests, and a book pricing '
+                     '<b>Some tickets reuse a game.</b> That happens when a '
+                     'window has fewer games than tiers, and it matters: two '
+                     'legs from one lineup share a pitcher, a park and a '
+                     'night, so the true chance of both landing is HIGHER '
+                     'than multiplying them suggests — and a book pricing '
                      'them as independent is paying you less than the '
-                     'correlation is worth. Kept rather than dropped '
-                     'because you may want them; just do not read the '
-                     'product as the real number.</div>')
+                     'correlation is worth. Flagged rather than dropped, '
+                     'because a one-game window has nothing to swap in.</div>')
 
-            _txt = "\n".join(_lines).strip()
             html('<div style="font-size:13px;font-weight:620;color:var(--ink);'
                  'margin-top:6px">Copy</div>')
-            st.code(_txt, language=None)
-            html('<div style="margin-top:8px;font-size:12px;'
-                 'color:var(--ink3);line-height:1.55">'
-                 'Probabilities are the model\'s, and the model is not a '
-                 'price. A leg at 62% is worth taking only against odds '
-                 'longer than 62% implies, and the one tab that compares '
-                 'the two is <b style="color:var(--ink2)">Pitchers</b>, '
-                 'where a captured line exists to compare against. There is '
-                 'no hitter-prop odds capture — player props are charged '
-                 'per event and the budget goes to strikeouts.</div>')
+            st.code("\n".join(_copy).strip(), language=None)
+
+            html(f'<div style="margin-top:8px;font-size:12px;'
+                 f'color:var(--ink3);line-height:1.55">'
+                 f'<b style="color:var(--ink2)">SAFE</b> is ranked by raw '
+                 f'probability — you want the surest thing, and there is '
+                 f'little to choose between bats up there anyway. '
+                 f'<b style="color:var(--ink2)">MEDIUM</b> and '
+                 f'<b style="color:var(--ink2)">LOTTO</b> are ranked by '
+                 f'lift over the slate median for that prop, because in the '
+                 f'middle and at the bottom raw probability just re-sorts '
+                 f'by which prop has the higher base rate, which is not a '
+                 f'fact about the player. A 12% home run is the field; a '
+                 f'39% home run is a different claim.<br>'
+                 f'<b style="color:var(--ink2)">Every hitter number here is '
+                 f'model-only.</b> There is no hitter-prop odds capture — '
+                 f'player props are charged per event and the free tier is '
+                 f'500 credits a month, so the budget goes to strikeouts. '
+                 f'Lift is the honest stand-in for market disagreement, and '
+                 f'it is not the same thing: it says the model rates him '
+                 f'well above a typical bat, not that anyone is mispricing '
+                 f'him.<br>'
+                 f'<b style="color:var(--ink2)">Each leg is a different '
+                 f'player</b>, and that rule does more work than it looks. '
+                 f'Many of these props are NESTED — two hits implies one '
+                 f'hit, a home run implies H+R+RBI 0.5 — so a ticket that '
+                 f'took the same bat three times would be one bet wearing '
+                 f'three labels, with a true probability equal to its '
+                 f'smallest leg rather than the product of them.<br>'
+                 f'The <b style="color:var(--ink2)">ARM</b> line is the '
+                 f'one leg on this page with a real measured edge, and it '
+                 f'only appears when a line was captured from at least '
+                 f'{MIN_BOOKS_BET} books.</div>')
 
 
 with tab_res:
