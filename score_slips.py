@@ -70,6 +70,22 @@ COUNTS = {"prob_hrr_over_": "hrr", "prob_tb_over_": "total_bases",
           "prob_hits_over_": "hits"}
 
 
+def step(n, total, label, detail=""):
+    """
+    A numbered banner, the same shape run_slate prints.
+
+    Scoring is four separate things that can each fail on their own -- the
+    slip file, the Statcast refresh, the official boxscore lines, the
+    grade -- and when it failed it used to fail as one undifferentiated
+    wall of output. Numbering them means a stall or an error tells you
+    WHICH stage, which is the whole reason run_slate does it.
+    """
+    print(f"\n{'=' * 72}\n{n}/{total}  {label}")
+    if detail:
+        print(f"  {detail}")
+    print("=" * 72)
+
+
 def grade_leg(prop_key, line, actual_row):
     """
     1, 0, or NaN for a single leg.
@@ -217,38 +233,76 @@ def main():
     date = args.date or (pd.Timestamp.today()
                          - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
+    STEPS = 5
+    print(f"SCORE SLIPS {date}")
+
+    # 1. The committed slips. Nothing downstream is possible without
+    #    them, and their ABSENCE is the most likely failure on any date
+    #    predicted before slips.py existed -- so it is step one and it
+    #    explains itself rather than just exiting.
+    step(1, STEPS, "Committed slips", f"cache/slips_{date}.csv")
     path = os.path.join(CACHE, f"slips_{date}.csv")
     if not os.path.exists(path):
-        print(f"No cache/slips_{date}.csv.\n"
-              f"Slips are committed before first pitch by slips.py — a slate "
-              f"predicted before that step existed has none, and rebuilding "
-              f"them now would grade today's code against last night's "
-              f"games rather than what was actually on the board.")
+        print(f"  Not found.\n"
+              f"  Slips are committed before first pitch by slips.py — a "
+              f"slate predicted before that step existed has none, and\n"
+              f"  rebuilding them now would grade today's code against last "
+              f"night's games rather than what was on the board.")
         return 1
     slips = pd.read_csv(path)
     if slips.empty:
-        print("Slip file is empty.")
+        print("  Slip file is empty.")
         return 1
+    n_slips = slips.groupby(["window", "tier"]).ngroups
+    n_arms = int((slips["kind"] == "arm").sum())
+    print(f"  {n_slips} slips, {len(slips)} legs "
+          f"({len(slips) - n_arms} bats, {n_arms} arms), "
+          f"{slips['window'].nunique()} windows.")
+    print(f"  Expected to land: "
+          f"{slips.drop_duplicates(['window', 'tier'])['slip_p'].sum():.2f}")
 
-    print(f"SCORING SLIPS {date}")
-    print(f"  {slips.groupby(['window', 'tier']).ngroups} slips, "
-          f"{len(slips)} legs.")
+    # 2. The slow one, and the one that fails when the games are not
+    #    final yet. Statcast posts a few hours after the last out.
+    step(2, STEPS, "Hitter outcomes",
+         "Statcast refresh + official boxscore lines")
+    try:
+        hitters = hitter_actuals(slips, date)
+    except SystemExit as exc:
+        print(f"  {exc}")
+        return 1
+    print(f"  {len(hitters)} hitter game lines.")
 
-    hitters = hitter_actuals(slips, date)
+    # 3. Separate call, separate failure. A slate whose arms cannot be
+    #    graded is still worth grading for its bats, so this one does not
+    #    stop the run.
+    step(3, STEPS, "Pitcher outcomes", "official pitching lines")
     arms = slips[slips["kind"] == "arm"]
-    pitchers = pitcher_actuals(arms, date) if len(arms) else {}
+    if not len(arms):
+        pitchers = {}
+        print("  No arm legs on these slips — nothing to fetch.")
+    else:
+        try:
+            pitchers = pitcher_actuals(arms, date)
+        except Exception as exc:
+            pitchers = {}
+            print(f"  Could not fetch pitching lines ({exc}). Slips with an "
+                  f"arm leg will be left ungraded rather than counted "
+                  f"against the model.")
+        print(f"  {len(pitchers)} starter lines.")
 
+    step(4, STEPS, "Grade", "a slip lands only when every leg does")
     scored, legs = grade(slips, hitters, pitchers)
     report(scored)
 
+    step(5, STEPS, "Running record", "cache/slip_log.csv")
     if args.dry_run:
-        print("\n  --dry-run: nothing written.")
+        print("  --dry-run: nothing written.")
         return 0
 
     scored = scored.assign(game_date=date)
     keep = scored.dropna(subset=["hit"])
     if keep.empty:
-        print("\n  Nothing gradeable; slip_log unchanged.")
+        print("  Nothing gradeable; slip_log unchanged.")
         return 0
     # Merge rather than append, the same rule the other logs follow: a
     # re-run of a date must replace that date's rows, not double them.
@@ -262,8 +316,7 @@ def main():
     keep.to_csv(LOG, index=False)
 
     run = keep.dropna(subset=["hit"])
-    print(f"\n  cache/slip_log.csv — {len(run)} slips over "
-          f"{run['game_date'].nunique()} night(s).")
+    print(f"  {len(run)} slips over {run['game_date'].nunique()} night(s).")
     if run["game_date"].nunique() >= 2:
         print(f"  {'tier':8} {'slips':>5} {'expected':>9} {'hit':>4} "
               f"{'gap':>8} {'verdict':>28}")
