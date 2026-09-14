@@ -141,11 +141,11 @@ def main():
     # 1. Lineups. Free, one second, and the thing worth knowing before
     #    committing a prediction: projected slots and confirmed slots give
     #    materially different plate appearances.
-    _run("1/5  Lineups", ["check_lineups.py", game_date], args.dry_run)
+    _run("1/6  Lineups", ["check_lineups.py", game_date], args.dry_run)
 
     # 2. Predictions. Free. MUST come before compare_market, which reads
     #    the pitcher file this writes.
-    if not _run("2/5  Predictions", ["predict_slate.py", game_date],
+    if not _run("2/6  Predictions", ["predict_slate.py", game_date],
                 args.dry_run):
         print("\n  Stopping: predictions failed, so there is nothing for the "
               "market comparison to compare against. No credits were spent.")
@@ -159,26 +159,45 @@ def main():
     #    After predict_slate because it reads pitchers_{date}.csv to know
     #    who is starting. A failure is not fatal -- the Pitchers tab says
     #    so and shows everything else.
-    _run("3/5  Recent form", ["pitcher_form.py", game_date], args.dry_run)
+    _run("3/6  Recent form", ["pitcher_form.py", game_date], args.dry_run)
 
     if args.no_odds:
+        # Slips still get committed. They lose only their pitcher leg --
+        # an arm needs a captured line to have a measured edge against --
+        # and a slate with no committed slips cannot be graded at all,
+        # which is a worse outcome than one graded without arms.
+        _run("6/6  Commit slips (no arm legs without odds)",
+             ["slips.py", game_date], args.dry_run)
         print(f"\n{'=' * 72}\n  --no-odds: skipped both odds calls and "
               f"compare_market. Nothing spent.\n{'=' * 72}")
         return 0
 
     # 4. The only step that costs anything.
-    _run("4/5  Strikeout props (1 credit per game not yet started)",
+    _run("4/6  Strikeout props (1 credit per game not yet started)",
          ["-m", "data.odds_lines", game_date], args.dry_run)
 
     # 5. Free, local, and the step that was running too early.
-    _run("5/5  Model vs market", ["compare_market.py", game_date],
+    _run("5/6  Model vs market", ["compare_market.py", game_date],
          args.dry_run)
+
+    # 6. Commit tonight's slips. LAST because it reads the odds: a
+    #    pitcher leg needs a captured line to have a measured edge
+    #    against, and the arm is the only leg on the board with one.
+    #
+    #    This is the step that makes "which slips hit" answerable. The
+    #    Bet ready tab used to build slips at render time, so they
+    #    existed only as pixels and could never be graded -- rebuilding
+    #    them the next morning would score today's code against last
+    #    night's games. Same rule as predictions and odds: commit before
+    #    first pitch or it is not evidence.
+    _run("6/6  Commit slips", ["slips.py", game_date], args.dry_run)
 
     if not args.dry_run:
         print(f"\n{'=' * 72}\nWROTE\n{'=' * 72}")
         for name in (f"slate_{game_date}", f"pitchers_{game_date}",
                      f"teams_{game_date}", f"pitcher_form_{game_date}",
-                     f"odds_{game_date}", f"market_compare_{game_date}"):
+                     f"odds_{game_date}", f"market_compare_{game_date}",
+                     f"slips_{game_date}"):
             path = os.path.join(CACHE, f"{name}.csv")
             if os.path.exists(path):
                 stamp = pd.Timestamp(os.path.getmtime(path), unit="s",
@@ -187,6 +206,7 @@ def main():
             else:
                 print(f"  cache/{name}.csv  -- not written")
         print("\n  After the games: python score_slate.py " + game_date)
+        print("                    python score_slips.py " + game_date)
     return 0
 
 

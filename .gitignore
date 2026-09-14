@@ -9,11 +9,17 @@
 #   2,870 cache files tracked. GitHub soft-warns at 1 GB and refuses
 #   pushes over 2 GB, and every night's run adds more.
 #
-# The deployed Streamlit app reads exactly ONE thing: cache/slate_*.csv.
-# dashboard.py imports only glob, os, pandas, streamlit and altair -- no
-# project modules -- so nothing else in cache/ is reachable from it.
-# predict_slate.py needs the rest, and predict_slate.py runs on your
-# machine, not on Streamlit's.
+# dashboard.py imports numpy, pandas, streamlit, altair and ONE project
+# module -- slips.py, which holds the definition of what a bet slip is and
+# reads no cache of its own. Nothing else in cache/ is reachable from the
+# deployed app, so every cache file the dashboard needs has to be listed
+# as an exception below. predict_slate.py needs the rest, and
+# predict_slate.py runs on your machine, not on Streamlit's.
+#
+# (This block used to say the dashboard imported no project modules and
+# read only cache/slate_*.csv. Both stopped being true as the Pitchers,
+# Results and Bet ready tabs grew. A comment that is quietly wrong is
+# worse than no comment -- it was the justification for the whole file.)
 # =====================================================================
 
 # --- Everything in cache/, then the exceptions -----------------------
@@ -55,6 +61,23 @@ cache/*
 # cannot compute this itself, and the same rule as always applies: if the
 # dashboard reads it, it has to be tracked. ~25 KB a night.
 !cache/pitcher_form_*.csv
+
+# Tonight's bet slips, committed BEFORE first pitch by slips.py, and the
+# running record of how they did.
+#
+# slips_{date}.csv is the same kind of thing as slate_{date}.csv: a record
+# of what was said before the games, which is the only version that can be
+# graded honestly afterwards. The Bet ready tab used to build slips at
+# render time, so they existed only as pixels -- "which slips hit last
+# night" had no answer, because rebuilding them the next morning would
+# score today's code against last night's games.
+#
+# slip_log.csv accumulates one row per slip per night and is NOT
+# regenerable: re-scoring an old date needs that date's slips file AND the
+# Statcast pull behind it. Same rule as scoring_log.csv. ~60 rows a night
+# in the first, ~20 in the second; a few KB each.
+!cache/slips_*.csv
+!cache/slip_log.csv
 
 # Accumulating records. Neither is regenerable: rescoring an old date needs
 # that date's prediction file AND the Statcast pull behind it, and the

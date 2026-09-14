@@ -2582,357 +2582,106 @@ render_picks_panel(df, props, cuts)
 # -------------------------------------------------------------- results
 # ------------------------------------------------------------- bet ready
 #
-# Nolan asked for this in three passes, and each one changed the shape.
+# This tab RENDERS slips; it no longer builds them. slips.py does that,
+# before first pitch, and writes cache/slips_{date}.csv.
 #
-#   1. "games get posted around like the same time for a set of games...
-#       maybe we can make a list, be like, hey, bet ready, parlay"
+# The reason is Nolan's question "which slips hit last night", which could
+# not be answered: the slips only ever existed as pixels. Rebuilding them
+# the next morning would have graded whatever today's code and today's
+# slate file produce, not what was on the board. That is the rule this
+# project keeps re-learning and .gitignore states twice -- a number you
+# want to grade later has to be committed before the game starts.
 #
-#   2. "is there any way to have a combination of stuff... not necessarily
-#       the highest it can be, but like, oh, this is kinda a pretty easy
-#       hit... medium hit, kinda risky... and then kinda like a lotto pick"
+# Reading the committed file rather than rebuilding also means the slip on
+# screen and the slip in slip_log.csv are the same object, and that there
+# is exactly ONE implementation of what a slip is. Building it in two
+# places is how the card and the copy text drifted apart once already.
 #
-#   3. "the slips should be different i.e. a slip purely for lotto numbers
-#       and 1 for purely safe med etc. but can still be mixed in terms of
-#       hits arm runs walks etc"
-#
-#   4. "i also like how you have it currently it allows for a lotto chance
-#       to hit so just have all different types"
-#
-# The third correction is the important one, and it is a betting point
-# rather than a presentation one. A slip that mixed a 75% leg with a 19%
-# leg was never a sensible bet: the long shot decides the whole slip, and
-# the near-certainty contributes almost nothing except shortening the
-# price. Parlays are built WITHIN a risk level, not across one.
-#
-# So each first-pitch window now produces FOUR slips: the original MIXED
-# one -- kept because a long shot riding along with two near-certainties
-# is a real thing to want, and cheap -- plus all-safe, all-medium and
-# all-lotto. Prop types mix freely inside every slip: a hit, a walk, a
-# total-bases line, a pitcher's strikeout number, whatever clears the bar.
-#
-# The "all hit" figure beside each slip is what makes them comparable. It
-# is the product of the legs, which is right for legs in different games
-# and TOO LOW when a window is small enough that two legs share one.
-#
-# THE TIERS, AND WHY THEY ARE RANKED DIFFERENTLY
-# ----------------------------------------------
-# A leg's absolute probability decides whether it hits, and -- with no
-# hitter odds anywhere in this project -- it is also the only proxy for
-# what it pays. So the tiers are cut on probability.
-#
-# Ranking WITHIN a tier wants a different number in each:
-#
-#   SAFE    by probability. You want the surest thing, and there is almost
-#           nothing to choose between bats up there anyway: the best on
-#           the board for H+R+RBI 0.5 is 80.1% against a 66.6% median.
-#
-#   MEDIUM  by LIFT over the slate median for that prop.
-#   LOTTO   by lift, and this is where lift earns its keep. The
-#           low-base-rate props spread enormously -- home run runs 10.6%
-#           median against a 39.3% best, 3.7x, and TB 3.5 is 2.8x. A 12%
-#           home run is the field; a 39% home run is a different claim.
-#
-# In the middle and at the bottom, raw probability would just re-sort by
-# which prop has the higher base rate, which is a fact about the prop and
-# not about the player.
-#
-# WHY NOT "MARKET DISAGREEMENT" FOR THE LOTTO TIER
-# ------------------------------------------------
-# Because there is none to read. The only market this project captures is
-# pitcher_strikeouts -- player props are charged per event and the free
-# tier is 500 credits a month. Every hitter number here is model-only, and
-# "the model likes him far more than a typical player" is the honest
-# stand-in. Pitcher legs carry the real number, and at most one goes in a
-# slip so a single measured edge cannot masquerade as three.
+# A slate predicted before slips.py existed has no file, so the tab falls
+# back to building live and says so.
 with tab_bet:
-    html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
-         'Bet ready</div><div style="color:var(--ink3);font-size:12.5px;'
-         'margin-bottom:14px">Four slips per first-pitch window — one '
-         'mixed, then one each of pure safe, medium and long shot. Props '
-         'mix inside every slip; risk levels only mix in the first.</div>')
+    try:
+        import slips as _S
+    except Exception as _e:            # pragma: no cover - deploy guard
+        _S = None
+        st.error(f"slips.py could not be imported ({_e}). The Bet ready tab "
+                 f"needs it — it holds the definition of what a slip is.")
 
-    # Cut points, set against the real spread of the props rather than
-    # picked round: 0.58 sits above every prop's median except the two
-    # "over 0.5" ones, and 0.28 sits below every median except the genuine
-    # long shots (HR, TB 2.5+, hits 1.5+, H+R+RBI 3.5).
-    SAFE_MIN, LOTTO_MAX = 0.58, 0.28
-    MIN_BOOKS_BET = 4
-    # At or below this the market is pricing a short outing, which is
-    # exactly where the model's compression makes it read high. A positive
-    # edge here is the bias, not a find -- see the Pitchers tab footnote.
-    LOW_LINE = 4.5
+    if _S is not None:
+        html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
+             'Bet ready</div><div style="color:var(--ink3);font-size:12.5px;'
+             'margin-bottom:14px">Four slips per first-pitch window — one '
+             'mixed, then one each of pure safe, medium and long shot. Props '
+             'mix inside every slip; risk levels only mix in the first.</div>')
 
-    _bc1, _bc2 = st.columns([1, 3])
-    with _bc1:
-        LEGS = st.selectbox("Legs per slip", [2, 3, 4, 5], index=1,
-                            key="bet_legs")
+        _slip_path = os.path.join(CACHE_DIR, f"slips_{slate_date}.csv")
+        _committed = os.path.exists(_slip_path)
+        _sl = None
+        if _committed:
+            try:
+                _sl = pd.read_csv(_slip_path)
+            except Exception:
+                _sl, _committed = None, False
+        if _sl is None or _sl.empty:
+            _committed = False
+            _sl = _S.build_slips(df, pit, _S.market_lines(slate_date,
+                                                          CACHE_DIR), legs=3)
 
-    _bd = df.dropna(subset=["start"]).copy()
-    if _bd.empty or not props:
-        html('<div class="sp-empty">Nothing to build a slip from.</div>')
-    else:
-        # Cluster on first pitch. A 30-minute gap is the break: 4:05 and
-        # 4:10 are one window, 4:10 and 6:10 are not.
-        _starts = (_bd.drop_duplicates("game_pk")[["game_pk", "start"]]
-                      .sort_values("start"))
-        _starts["window"] = (_starts["start"].diff()
-                             > pd.Timedelta(minutes=30)).cumsum()
-        _win = dict(zip(_starts["game_pk"], _starts["window"]))
-
-        # ---- every hitter leg, one row per (player, prop) --------------
-        _med = {k: float(df[k].median()) for k in props
-                if pd.notna(df[k].median()) and float(df[k].median()) > 0}
-        _parts = []
-        for _k in props:
-            if _k not in _med:
-                continue
-            _col = pd.to_numeric(_bd[_k], errors="coerce")
-            _ok = _col.notna() & (_col > 0)
-            if not _ok.any():
-                continue
-            _sub = _bd.loc[_ok, ["name", "team", "opponent", "game_pk",
-                                 "lineup_slot"]].copy()
-            _sub["p"] = _col[_ok]
-            _sub["lift"] = _sub["p"] / _med[_k]
-            _sub["prop"] = props[_k][0]
-            _sub["base"] = _med[_k]
-            _sub["kind"] = "bat"
-            _sub["edge"] = float("nan")
-            _sub["suspect"] = False
-            _parts.append(_sub)
-        _legs = (pd.concat(_parts, ignore_index=True) if _parts
-                 else pd.DataFrame())
-
-        # ---- pitcher legs, recomputed here on purpose ------------------
-        #
-        # NOT read off pit_view. This is a flat script: pit_view only
-        # exists inside a conditional in the Pitchers tab, and reaching
-        # across for it is the pattern that has broken a tab in this file
-        # twice. Recomputing from `pit` costs nothing.
-        _plegs = pd.DataFrame()
-        if (pit is not None and not pit.empty and "k_dist" in pit.columns
-                and "game_pk" in pit.columns):
-            _m = market_lines(slate_date)
-            _rows = []
-            for _, _r in pit.iterrows():
-                _hit = _m.get(str(_r.get("pitcher")))
-                if not _hit or _hit[2] < MIN_BOOKS_BET:
-                    continue          # no real line; nothing to bet against
-                _line, _mp, _bk = _hit
-                _p = prob_over(parse_pmf(_r.get("k_dist")), _line)
-                if not pd.notna(_p):
-                    continue
-                # THE LEG IS THE SIDE THE MODEL LIKES, not always the
-                # over. An earlier version always wrote "Over L" and
-                # attached the signed edge, which put Tyler Glasnow's
-                # "Over 7.5 K, 29.7%, market 42%, -12.1%" on a slip -- a
-                # leg the model is saying NOT to take, presented as a
-                # pick. A negative edge on the over is a positive edge on
-                # the under, and that is the bet.
-                if _p >= _mp:
-                    _side, _lp, _mq = "Over", _p, _mp
-                else:
-                    _side, _lp, _mq = "Under", 1.0 - _p, 1.0 - _mp
-                _e = _lp - _mq          # positive by construction
-                _rows.append({
-                    "name": _r.get("pitcher"), "team": _r.get("team"),
-                    "opponent": _r.get("opponent"),
-                    "game_pk": _r.get("game_pk"), "lineup_slot": pd.NA,
-                    "p": _lp, "lift": float("nan"),
-                    "prop": f"{_side} {_line:.1f} K", "base": _mq,
-                    "kind": "arm", "edge": _e,
-                    # The model's biggest positive edges are systematically
-                    # its least real: over 202 pitcher-nights it moves 0.67
-                    # strikeouts for every 1 the market moves, so it reads
-                    # high on short-outing arms, and a book posting 3.5 on
-                    # a starter is pricing a pitch limit the model cannot
-                    # see. Ranking by magnitude alone put a +35.6% OVER at
-                    # a 3.5 line on top of a slip.
-                    # Only the OVER side at a low line is the known
-                    # bias. The under at 3.5 is the model agreeing the
-                    # outing is short, which is not the failure mode.
-                    "suspect": bool(_side == "Over" and _line <= LOW_LINE)})
-            _plegs = pd.DataFrame(_rows)
-            # A suspect arm is EXCLUDED from every slip, not demoted.
-            #
-            # Demoting it was the first attempt and it still put Tanner
-            # Gordon's "Over 3.5 K, +17.9%" at the top of a SAFE slip,
-            # carrying its own warning. A leg the model is measurably
-            # wrong about does not belong on a bet slip at any rank --
-            # the warning is an admission, not a mitigation. These rows
-            # stay visible on the Pitchers tab, where the footnote
-            # explaining them lives.
-            if not _plegs.empty and "suspect" in _plegs.columns:
-                _plegs = _plegs[~_plegs["suspect"].astype(bool)]
-
-        if _legs.empty:
-            html('<div class="sp-empty">No legs on this slate.</div>')
+        if _sl is None or _sl.empty:
+            html('<div class="sp-empty">No slips for this slate.<br>'
+                 '<span style="color:var(--ink3);font-size:12px">'
+                 'Run <code>python slips.py</code> after a predict, or check '
+                 'that the slate has start times and probability '
+                 'columns.</span></div>')
         else:
-            _legs["window"] = _legs["game_pk"].map(_win)
-            _legs = _legs.dropna(subset=["window"])
-            if not _plegs.empty:
-                _plegs["window"] = _plegs["game_pk"].map(_win)
-                _plegs = _plegs.dropna(subset=["window"])
+            if not _committed:
+                html('<div style="margin:-6px 0 12px;font-size:12px;'
+                     'color:var(--b2ink);line-height:1.5">These are built '
+                     'live from the slate, not committed. Nothing graded '
+                     'them and nothing will — run '
+                     '<code>python slips.py</code> before first pitch and '
+                     'the slips become a record that '
+                     '<code>score_slips.py</code> can score afterwards.'
+                     '</div>')
 
-            def tier_of(p):
-                return ("SAFE" if p >= SAFE_MIN
-                        else "LOTTO" if p < LOTTO_MAX else "MEDIUM")
+            TIER_COLOUR = {"MIXED": "var(--ink2)", "SAFE": "var(--b4)",
+                           "MEDIUM": "var(--accent)", "LOTTO": "var(--b2ink)"}
+            TIER_WHY = {
+                "MIXED": "one of each, so a long shot rides along",
+                "SAFE": "every leg a near-certainty",
+                "MEDIUM": "live, and well clear of the field",
+                "LOTTO": "long odds the model rates far above a typical player",
+            }
 
-            _legs["tier"] = _legs["p"].map(tier_of)
-            if not _plegs.empty:
-                # An arm is tiered by its own probability like everything
-                # else -- that is what makes it mixable into a slip
-                # instead of sitting on its own line.
-                _plegs["tier"] = _plegs["p"].map(tier_of)
+            _cards, _copy = "", []
+            for _w, _wg in _sl.groupby("window"):
+                _n_games = int(_wg["n_games"].iloc[0])
+                _solo = bool(_wg["solo"].iloc[0])
+                _t0 = pd.to_datetime(_wg["window_start"].iloc[0], utc=True,
+                                     errors="coerce")
+                _t1 = pd.to_datetime(_wg["window_end"].iloc[0], utc=True,
+                                     errors="coerce")
+                if pd.notna(_t0):
+                    _t0 = _t0.tz_convert("America/New_York")
+                if pd.notna(_t1):
+                    _t1 = _t1.tz_convert("America/New_York")
+                _label = (fmt_clock(_t0) if _t0 == _t1
+                          else f"{fmt_clock(_t0)} – {fmt_clock(_t1)}")
 
-            TIERS = [
-                ("SAFE", "var(--b4)", "p",
-                 "every leg a near-certainty"),
-                ("MEDIUM", "var(--accent)", "lift",
-                 "live, and well clear of the field"),
-                ("LOTTO", "var(--b2ink)", "lift",
-                 "long odds the model rates far above a typical player"),
-            ]
-
-            def fill(pool, arms, by, n):
-                """
-                One slip: up to `n` legs from a single tier.
-
-                TWO exclusions, and the first matters more than it looks.
-                An earlier version only avoided reusing a GAME and produced
-
-                    Yandy Diaz  Hit       73.2%
-                    Yandy Diaz  Hits 1.5  33.1%
-                    Yandy Diaz  Hits 2.5  10.0%
-
-                which is not a parlay. The props are NESTED -- two hits
-                implies one hit implies a hit -- so those legs are one bet
-                wearing three labels, with a true probability equal to the
-                smallest of them rather than the product. A home run
-                implies H+R+RBI 0.5 the same way. Excluding the player
-                outright is the only rule that is safe without hard-coding
-                which props imply which, and a slip wants different names
-                regardless.
-
-                Games are avoided second, as a preference only: a one-game
-                window has nothing to swap in, so a clash is flagged.
-
-                At most ONE arm per slip. There are rarely more than a
-                couple with a real line in a window, and three legs off one
-                measured edge would read as three independent reads.
-                """
-                used_g, used_n, out = set(), set(), []
-                # The arm goes in first when it has a trustworthy edge:
-                # it is the only leg on the page with a measured number,
-                # so it earns its place rather than winning a ranking it
-                # cannot be scored on.
-                if arms is not None and not arms.empty:
-                    _a = arms.sort_values(
-                        ["suspect", "edge"],
-                        ascending=[True, False],
-                        key=lambda c: c.abs() if c.name == "edge" else c)
-                    _a = _a.iloc[0]
-                    out.append({"row": _a, "clash": False})
-                    used_g.add(_a["game_pk"])
-                    used_n.add(_a["name"])
-                while len(out) < n:
-                    avail = pool[~pool["name"].isin(used_n)]
-                    if avail.empty:
-                        break
-                    fresh = avail[~avail["game_pk"].isin(used_g)]
-                    clash = fresh.empty
-                    best = (avail if clash else fresh).nlargest(1, by).iloc[0]
-                    used_g.add(best["game_pk"])
-                    used_n.add(best["name"])
-                    out.append({"row": best, "clash": clash})
-                return out
-
-            def mixed(group, arms, n_each=1):
-                """
-                The original ticket: one leg per tier, plus an arm.
-
-                Kept alongside the pure slips on Nolan's read -- "it allows
-                for a lotto chance to hit". It is a different bet from any
-                of the pure three: two near-certainties carry it while the
-                long shot supplies the price, which is exactly the thing a
-                pure-safe slip cannot do and a pure-lotto slip cannot
-                survive.
-                """
-                used_g, used_n, out = set(), set(), []
-                if arms is not None and not arms.empty:
-                    a = arms.sort_values(
-                        ["suspect", "edge"], ascending=[True, False],
-                        key=lambda c: c.abs() if c.name == "edge" else c
-                    ).iloc[0]
-                    out.append({"row": a, "clash": False})
-                    used_g.add(a["game_pk"])
-                    used_n.add(a["name"])
-                for tname, colour, by, why in TIERS:
-                    pool = group[(group["tier"] == tname)
-                                 & (~group["name"].isin(used_n))]
-                    if pool.empty:
-                        continue
-                    fresh = pool[~pool["game_pk"].isin(used_g)]
-                    clash = fresh.empty
-                    best = (pool if clash else fresh).nlargest(1, by).iloc[0]
-                    used_g.add(best["game_pk"])
-                    used_n.add(best["name"])
-                    out.append({"row": best, "clash": clash})
-                return out
-
-            _slips = []
-            for _w, _g in _legs.groupby("window"):
-                _wg = _bd[_bd["game_pk"].isin(_g["game_pk"])]
-                _t0, _t1 = _wg["start"].min(), _wg["start"].max()
-                _ngames = int(_wg["game_pk"].nunique())
-                _pw = (_plegs[_plegs["window"] == _w]
-                       if not _plegs.empty else pd.DataFrame())
-                _built = [{
-                    "tier": "MIXED", "colour": "var(--ink2)",
-                    "why": "one of each, so a long shot rides along",
-                    "legs": mixed(_g, _pw if not _pw.empty else None)}]
-                for _tname, _colour, _by, _why in TIERS:
-                    _built.append({
-                        "tier": _tname, "colour": _colour, "why": _why,
-                        "legs": fill(_g[_g["tier"] == _tname],
-                                     _pw[_pw["tier"] == _tname]
-                                     if not _pw.empty else None,
-                                     _by, int(LEGS))})
-                _slips.append({
-                    "label": (fmt_clock(_t0) if _t0 == _t1
-                              else f"{fmt_clock(_t0)} – {fmt_clock(_t1)}"),
-                    "games": _ngames,
-                    # In a one-game window every leg is same-game by
-                    # definition, so a per-leg flag prints the same warning
-                    # n times and says nothing the header does not.
-                    "solo": _ngames == 1,
-                    "tiers": _built})
-
-            _corr_any = any(l["clash"] for s in _slips if not s["solo"]
-                            for t in s["tiers"] for l in t["legs"])
-            _solo_any = any(s["solo"] for s in _slips)
-
-            # ---- render ---------------------------------------------
-            _cards = ""
-            for _s in _slips:
+                _copy.append(f'{_label}  ({_n_games} game'
+                             f'{"s" if _n_games != 1 else ""}'
+                             f'{" — every leg correlated" if _solo else ""})')
                 _tier_html = ""
-                for _t in _s["tiers"]:
-                    if not _t["legs"]:
-                        _tier_html += (
-                            f'<div style="padding:9px 0;border-top:1px solid '
-                            f'var(--line);font-size:12.5px">'
-                            f'<span style="color:{_t["colour"]};'
-                            f'font-weight:640;letter-spacing:.08em;'
-                            f'font-size:11px">{_t["tier"]}</span>'
-                            f'<span style="color:var(--ink3);margin-left:10px">'
-                            f'nothing in this window clears the bar</span>'
-                            f'</div>')
+                for _tname in _S.TIER_ORDER:
+                    _g = _wg[_wg["tier"] == _tname]
+                    if _g.empty:
                         continue
+                    _sp = float(_g["slip_p"].iloc[0])
+                    _colour = TIER_COLOUR.get(_tname, "var(--ink2)")
+                    _copy.append(f'  {_tname} slip  ({len(_g)} legs, all hit '
+                                 f'{_sp:.1%})')
                     _rows = ""
-                    _joint = 1.0
-                    for _l in _t["legs"]:
-                        _b = _l["row"]
-                        _joint *= float(_b["p"])
+                    for _, _b in _g.iterrows():
                         _slot = _b.get("lineup_slot")
                         _bat = (f' · bats {ORDINAL.get(int(_slot), int(_slot))}'
                                 if pd.notna(_slot) else "")
@@ -2941,18 +2690,18 @@ with tab_bet:
                             _ecol = ("var(--b4)" if _e >= 0.05 else
                                      "var(--b1ink)" if _e <= -0.05
                                      else "var(--ink3)")
-                            _note = (f'market {_b["base"]:.0%} · '
+                            _note = (f'market {float(_b["base"]):.0%} · '
                                      f'<b style="color:{_ecol}">{_e:+.1%}</b>'
-                                     + ('<span style="color:var(--warn)"> — '
-                                        'low line, likely the model\'s bias'
-                                        '</span>' if _b["suspect"] else
-                                        ' — a measured edge'))
+                                     f' — a measured edge')
+                            _tail = (f'   market {float(_b["base"]):.0%}, '
+                                     f'{_e:+.1%}')
                         else:
-                            _note = (f'{_b["lift"]:.1f}× the '
-                                     f'{_b["base"]:.0%} slate median')
+                            _note = (f'{float(_b["lift"]):.1f}× the '
+                                     f'{float(_b["base"]):.0%} slate median')
+                            _tail = f'   {float(_b["lift"]):.1f}x field'
+                        _clash = bool(_b.get("clash")) and not _solo
                         _same = (' · <span style="color:var(--warn)">same '
-                                 'game</span>'
-                                 if _l["clash"] and not _s["solo"] else "")
+                                 'game</span>' if _clash else "")
                         _rows += (
                             f'<div style="display:flex;gap:9px;'
                             f'align-items:baseline;padding:3px 0 3px 12px">'
@@ -2963,70 +2712,40 @@ with tab_bet:
                             f'{_b["prop"]}</span>'
                             f'<span style="margin-left:auto;font-weight:640;'
                             f'color:var(--ink);font-size:12.5px">'
-                            f'{pct(_b["p"])}</span></div>'
+                            f'{pct(float(_b["p"]))}</span></div>'
                             f'<div style="font-size:11px;color:var(--ink3);'
                             f'padding-left:12px">{_note}{_same}</div>')
+                        _copy.append(
+                            f'    {_b["name"]} ({_b["team"]}) — '
+                            f'{_b["prop"]} — {pct(float(_b["p"]))}{_tail}'
+                            + ("   [same game]" if _clash else ""))
                     _tier_html += (
                         f'<div style="padding:9px 0;border-top:1px solid '
                         f'var(--line)">'
                         f'<div style="display:flex;gap:10px;'
                         f'align-items:baseline">'
-                        f'<span style="color:{_t["colour"]};font-weight:640;'
-                        f'letter-spacing:.08em;font-size:11px">{_t["tier"]}'
-                        f'</span>'
+                        f'<span style="color:{_colour};font-weight:640;'
+                        f'letter-spacing:.08em;font-size:11px">{_tname}</span>'
                         f'<span style="color:var(--ink3);font-size:11px">'
-                        f'{len(_t["legs"])} legs · {_t["why"]}</span>'
+                        f'{len(_g)} legs · {TIER_WHY.get(_tname, "")}</span>'
                         f'<span style="margin-left:auto;color:var(--ink2);'
                         f'font-size:11.5px">all hit '
-                        f'<b style="color:var(--ink)">{_joint:.1%}</b></span>'
+                        f'<b style="color:var(--ink)">{_sp:.1%}</b></span>'
                         f'</div>{_rows}</div>')
+                    _copy.append("")
                 _cards += (
                     f'<div class="sp-find" style="padding:13px 15px">'
-                    f'<div class="kind" style="color:var(--accent)">'
-                    f'{_s["label"]}</div>'
-                    f'<div class="txt" style="margin:2px 0 2px">'
-                    f'{_s["games"]} game{"s" if _s["games"] != 1 else ""} in '
-                    f'this window'
+                    f'<div class="kind" style="color:var(--accent)">{_label}'
+                    f'</div><div class="txt" style="margin:2px 0 2px">'
+                    f'{_n_games} game{"s" if _n_games != 1 else ""} in this '
+                    f'window'
                     + ('<span style="color:var(--warn)"> — one game, so every '
-                       'leg here is correlated</span>' if _s["solo"] else '')
+                       'leg here is correlated</span>' if _solo else '')
                     + f'</div>{_tier_html}</div>')
-
-            # ---- the same slips, as pasteable text -------------------
-            _copy = []
-            for _s in _slips:
-                _copy.append(f'{_s["label"]}  ({_s["games"]} game'
-                             f'{"s" if _s["games"] != 1 else ""}'
-                             f'{" — every leg correlated" if _s["solo"] else ""})')
-                for _t in _s["tiers"]:
-                    if not _t["legs"]:
-                        _copy.append(f'  {_t["tier"]} slip  —  nothing clears '
-                                     f'the bar')
-                        _copy.append("")
-                        continue
-                    _joint = 1.0
-                    for _l in _t["legs"]:
-                        _joint *= float(_l["row"]["p"])
-                    _copy.append(f'  {_t["tier"]} slip  '
-                                 f'({len(_t["legs"])} legs, all hit '
-                                 f'{_joint:.1%})')
-                    for _l in _t["legs"]:
-                        _b = _l["row"]
-                        _tail = (f'   market {_b["base"]:.0%}, '
-                                 f'{float(_b["edge"]):+.1%}'
-                                 + ("  [low line — likely the model's bias]"
-                                    if _b["suspect"] else "")
-                                 if _b["kind"] == "arm"
-                                 else f'   {_b["lift"]:.1f}x field')
-                        _copy.append(
-                            f'    {_b["name"]} ({_b["team"]}) — '
-                            f'{_b["prop"]} — {pct(_b["p"])}{_tail}'
-                            + ("   [same game]"
-                               if _l["clash"] and not _s["solo"] else ""))
-                    _copy.append("")
 
             html(f'<div class="sp-read">{_cards}</div>')
 
-            if _corr_any or _solo_any:
+            if bool(_sl["clash"].any()) or bool(_sl["solo"].any()):
                 html('<div style="margin:4px 0 14px;font-size:12.5px;'
                      'color:var(--b2ink);line-height:1.55">'
                      '<b>Some slips reuse a game.</b> That happens when a '
@@ -3044,16 +2763,27 @@ with tab_bet:
                  'margin-top:6px">Copy</div>')
             st.code("\n".join(_copy).strip(), language=None)
 
+            _exp = (_sl.drop_duplicates(["window", "tier"])
+                       .groupby("tier")["slip_p"].sum())
             html(f'<div style="margin-top:8px;font-size:12px;'
                  f'color:var(--ink3);line-height:1.55">'
+                 f'<b style="color:var(--ink2)">What to expect tonight.</b> '
+                 f'Adding up the slip probabilities: '
+                 + " · ".join(f'{t} <b style="color:var(--ink2)">'
+                              f'{_exp.get(t, 0):.2f}</b>'
+                              for t in _S.TIER_ORDER if t in _exp.index)
+                 + f' slips expected to land, out of '
+                 f'{_sl.groupby(["window", "tier"]).ngroups}. A LOTTO slip is '
+                 f'expected about once every fifty nights, so a long run of '
+                 f'nothing there is the correct-looking result rather than a '
+                 f'failure — which is why the Results tab reports expected '
+                 f'against actual and not a win-loss record.<br>'
                  f'<b style="color:var(--ink2)">Why the slips are '
                  f'separated.</b> A 19% leg on the same slip as a 75% leg '
-                 f'does not make the slip riskier in proportion — it decides '
-                 f'it. The long shot is doing all the work and the '
-                 f'near-certainty is mostly shortening the price, which is '
-                 f'the worst of both. Parlays are built within a risk level; '
-                 f'the mixing here is across prop TYPES — a hit, a walk, a '
-                 f'total-bases line, a pitcher\'s strikeout number.<br>'
+                 f'does not make it riskier in proportion — it decides it. '
+                 f'The long shot does all the work and the near-certainty '
+                 f'mostly shortens the price. Parlays are built within a '
+                 f'risk level; the mixing here is across prop TYPES.<br>'
                  f'<b style="color:var(--ink2)">SAFE</b> is ranked by raw '
                  f'probability; <b style="color:var(--ink2)">MEDIUM</b> and '
                  f'<b style="color:var(--ink2)">LOTTO</b> by lift over the '
@@ -3063,22 +2793,19 @@ with tab_bet:
                  f'home run is the field; a 39% home run is a different '
                  f'claim.<br>'
                  f'<b style="color:var(--ink2)">Each leg is a different '
-                 f'player</b>, and that rule does more work than it looks. '
-                 f'Many of these props are NESTED — two hits implies one '
-                 f'hit, a home run implies H+R+RBI 0.5 — so a slip that took '
-                 f'the same bat three times would be one bet wearing three '
-                 f'labels, worth its smallest leg rather than the product of '
-                 f'them.<br>'
+                 f'player</b>, because many of these props are NESTED — two '
+                 f'hits implies one hit, a home run implies H+R+RBI 0.5 — so '
+                 f'a slip taking the same bat three times would be one bet '
+                 f'wearing three labels, worth its smallest leg rather than '
+                 f'the product.<br>'
                  f'<b style="color:var(--ink2)">Every hitter number here is '
                  f'model-only.</b> There is no hitter-prop odds capture — '
                  f'player props are charged per event and the free tier is '
-                 f'500 credits a month, so the budget goes to strikeouts. '
-                 f'Lift is the honest stand-in for market disagreement and '
-                 f'is not the same thing: it says the model rates him well '
-                 f'above a typical player, not that anyone is mispricing '
-                 f'him. A pitcher leg carries the real number, and at most '
-                 f'one goes in a slip so a single measured edge cannot look '
-                 f'like three.</div>')
+                 f'500 credits a month. Lift is the honest stand-in for '
+                 f'market disagreement and is not the same thing. A pitcher '
+                 f'leg carries the real number, and at most one goes in a '
+                 f'slip so a single measured edge cannot look like '
+                 f'three.</div>')
 
 
 with tab_res:
@@ -3510,3 +3237,136 @@ with tab_res:
              f'<i>not yet separable from noise</i> is not a number to '
              f'correct for — it is a number to keep watching, and this row '
              f'is the thing that will eventually say so.</div>')
+
+    # ---- whole slips ------------------------------------------------
+    #
+    # Nolan asked which slips hit. This is that, and it is deliberately
+    # EXPECTED against ACTUAL rather than a win-loss record.
+    #
+    # Twenty slips a night and about 2.3 expected to land, 1.7 of them
+    # SAFE. A LOTTO slip is expected roughly once every fifty-six nights,
+    # so its record reads 0-for-everything for months — and reading that
+    # as a failure is exactly the mistake the layout has to prevent. To
+    # detect a 20% miscalibration takes about 38 nights for SAFE, 286 for
+    # MEDIUM, 526 for MIXED and 5,500 for LOTTO.
+    #
+    # Expected accumulates information every night even when nothing
+    # lands, which a record does not.
+    _slog_path = os.path.join(CACHE_DIR, "slip_log.csv")
+    _slog = None
+    if os.path.exists(_slog_path):
+        try:
+            _slog = pd.read_csv(_slog_path).dropna(subset=["hit"])
+        except Exception:
+            _slog = None
+
+    if _slog is not None and not _slog.empty:
+        _nights = _slog["game_date"].nunique()
+        html(f'<div style="font-size:15px;font-weight:640;color:var(--ink);'
+             f'margin-top:30px">Whole slips</div>'
+             f'<div style="color:var(--ink3);font-size:12.5px;'
+             f'margin-bottom:12px">Did every leg land? '
+             f'{len(_slog)} slips over {_nights} night'
+             f'{"s" if _nights != 1 else ""}, graded against the version '
+             f'committed before first pitch.</div>')
+
+        _rows = ""
+        for _t in ("MIXED", "SAFE", "MEDIUM", "LOTTO"):
+            _sub = _slog[_slog["tier"] == _t]
+            if _sub.empty:
+                continue
+            _exp = float(_sub["slip_p"].sum())
+            _act = float(_sub["hit"].sum())
+            # Poisson-binomial: the variance of a sum of independent
+            # indicators is the sum of p(1-p), NOT n*p*(1-p). Using the
+            # latter would overstate the error bar several times over on
+            # a tier whose slips have wildly different probabilities.
+            _se = float(((_sub["slip_p"] * (1 - _sub["slip_p"])).sum()) ** 0.5)
+            if _exp < 1:
+                _verdict, _vc = "too few expected to read yet", "var(--ink3)"
+            elif _se > 0 and abs(_act - _exp) > 2 * _se:
+                _verdict = "running hot" if _act > _exp else "running cold"
+                _vc = "var(--warn)"
+            else:
+                _verdict, _vc = "not yet separable from noise", "var(--ink3)"
+            _rows += (
+                f'<tr><td style="font-weight:560">{_t}</td>'
+                f'<td style="text-align:right">{len(_sub)}</td>'
+                f'<td style="text-align:right">{_exp:.1f}</td>'
+                f'<td style="text-align:right">{_act:.0f}</td>'
+                f'<td style="text-align:right">{_act - _exp:+.1f}</td>'
+                f'<td style="text-align:right;color:var(--ink3)">'
+                f'±{_se:.1f}</td>'
+                f'<td style="color:{_vc};font-size:12px">{_verdict}</td></tr>')
+        html(f'<table class="plain"><thead><tr><th>Tier</th>'
+             f'<th style="text-align:right">Slips</th>'
+             f'<th style="text-align:right">Expected</th>'
+             f'<th style="text-align:right">Hit</th>'
+             f'<th style="text-align:right">Gap</th>'
+             f'<th style="text-align:right">±</th>'
+             f'<th></th></tr></thead><tbody>{_rows}</tbody></table>')
+
+        # The one thing this data can measure that nothing else can.
+        #
+        # A slip's probability is the product of its legs, which is right
+        # only when they are independent. Two legs from one lineup share a
+        # pitcher, a park and a night, so they land together more often
+        # than the product implies. The tab has said so in words since it
+        # was built and has never been able to say by how much. Split the
+        # pool and the gap between the two halves IS the correlation.
+        if "correlated" in _slog.columns and _slog["correlated"].nunique() > 1:
+            _cr = ""
+            for _flag, _lab in ((False, "Legs in different games"),
+                                (True, "Two or more legs in one game")):
+                _sub = _slog[_slog["correlated"].astype(bool) == _flag]
+                if _sub.empty:
+                    continue
+                _exp = float(_sub["slip_p"].sum())
+                _act = float(_sub["hit"].sum())
+                _se = float(((_sub["slip_p"] * (1 - _sub["slip_p"])).sum()) ** 0.5)
+                _ratio = (f"{_act / _exp:.2f}×" if _exp > 0 else "—")
+                _cr += (
+                    f'<tr><td style="font-weight:560">{_lab}</td>'
+                    f'<td style="text-align:right">{len(_sub)}</td>'
+                    f'<td style="text-align:right">{_exp:.1f}</td>'
+                    f'<td style="text-align:right">{_act:.0f}</td>'
+                    f'<td style="text-align:right">{_ratio}</td>'
+                    f'<td style="text-align:right;color:var(--ink3)">'
+                    f'±{_se:.1f}</td></tr>')
+            html(f'<div style="font-size:13px;font-weight:620;'
+                 f'color:var(--ink);margin-top:20px">Is the correlation '
+                 f'warning worth a number yet?</div>'
+                 f'<table class="plain" style="margin-top:6px">'
+                 f'<thead><tr><th>Slip</th>'
+                 f'<th style="text-align:right">Slips</th>'
+                 f'<th style="text-align:right">Expected</th>'
+                 f'<th style="text-align:right">Hit</th>'
+                 f'<th style="text-align:right">Actual ÷ expected</th>'
+                 f'<th style="text-align:right">±</th></tr></thead>'
+                 f'<tbody>{_cr}</tbody></table>')
+
+        html(f'<div style="margin-top:12px;font-size:12px;color:var(--ink3);'
+             f'line-height:1.55">'
+             f'<b style="color:var(--ink2)">Expected</b> is the sum of the '
+             f'committed slip probabilities — what should have landed if '
+             f'the numbers are honest. It is reported instead of a win-loss '
+             f'record because a record cannot be read: about 2.3 of 20 '
+             f'slips a night are expected to land, and a LOTTO slip roughly '
+             f'once every fifty-six nights, so <b style="color:var(--ink2)">'
+             f'0-for-200 on LOTTO is the correct-looking result, not a '
+             f'failure</b>. Telling a calibrated tier from one that is 20% '
+             f'off takes around 38 nights for SAFE, 286 for MEDIUM and '
+             f'5,500 for LOTTO — so SAFE is the only row that will say '
+             f'anything this season.<br>'
+             f'The <b style="color:var(--ink2)">±</b> is the Poisson-'
+             f'binomial standard deviation, the sum of p(1−p) across the '
+             f'slips, not n·p̄(1−p̄) — these slips have wildly different '
+             f'probabilities and the simpler formula would overstate the '
+             f'error bar several times over.<br>'
+             f'The second table is the only place the correlation warning '
+             f'can become a measurement. Slips whose legs share a game '
+             f'should beat their product, because the legs land together; '
+             f'clean slips should sit on it. If that gap opens up, the '
+             f'ratio is how much a same-game leg is really worth — and the '
+             f'<i>all hit</i> figure on the Bet ready tab is too low by '
+             f'about that factor.</div>')
