@@ -102,6 +102,72 @@ def slate_clock(game_date: str):
     return len(starts), int((starts <= now).sum()), starts.min()
 
 
+def credit_report(game_date: str):
+    """
+    What tonight cost, what the month has cost, and how long that lasts.
+
+    The free tier is 500 credits a month and player props are charged PER
+    EVENT, so a fifteen-game slate is fifteen credits and a second capture
+    the same night is fifteen MORE -- the endpoint has no idea it already
+    sold you that game. Two captures a night is therefore roughly 16
+    nights of season, not 33, and that arithmetic used to live only in a
+    docstring where it could not warn anyone.
+    """
+    path = os.path.join(CACHE, "credit_log.csv")
+    if not os.path.exists(path):
+        return
+    try:
+        log = pd.read_csv(path)
+    except Exception:
+        return
+    if log.empty:
+        return
+    log["fetched_at_utc"] = pd.to_datetime(log["fetched_at_utc"],
+                                           errors="coerce", utc=True)
+
+    print(f"\n{'=' * 72}\nCREDITS\n{'=' * 72}")
+
+    tonight = log[log["game_date"].astype(str) == game_date]
+    if len(tonight):
+        spent = int(tonight["credits_charged"].sum())
+        saved = int(tonight["credits_saved"].sum())
+        calls = len(tonight)
+        # "saved" now covers two reasons -- already underway, and already
+        # priced -- and this row cannot tell them apart, so it does not
+        # claim to. odds_lines prints the breakdown as it happens.
+        print(f"  This slate     {spent:>4} spent"
+              + (f" · {saved} saved (already underway or already priced)"
+                 if saved else "")
+              + (f" · across {calls} captures" if calls > 1 else ""))
+        if calls > 1:
+            # The endpoint charges per event every time and has no idea it
+            # already sold you a game, so odds_lines skips games already
+            # in odds_{date}.csv. Worth saying, because the saving is
+            # invisible otherwise.
+            print(f"                  later pulls skipped games already "
+                  f"priced — pass --refresh to re-buy them at a later line")
+
+    now = pd.Timestamp.utcnow()
+    month = log[log["fetched_at_utc"].dt.strftime("%Y-%m")
+                == now.strftime("%Y-%m")]
+    if len(month):
+        used = int(month["credits_charged"].sum())
+        print(f"  This month     {used:>4} spent over "
+              f"{month['game_date'].nunique()} slate(s)")
+
+    # The API's own header beats anything counted up here, and it is the
+    # only figure that survives a cache wipe.
+    left = log["credits_remaining"].dropna()
+    if len(left):
+        remaining = int(left.iloc[-1])
+        print(f"  Plan says      {remaining:>4} left")
+        if len(month) and month["game_date"].nunique():
+            per_night = used / month["game_date"].nunique()
+            if per_night > 0:
+                print(f"  At {per_night:.0f} a night  "
+                      f"{remaining / per_night:>4.0f} more nights")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run a slate end to end, in dependency order.")
@@ -173,7 +239,10 @@ def main():
         return 0
 
     # 4. The only step that costs anything.
-    _run("4/6  Strikeout props (1 credit per game not yet started)",
+    #    Incremental: a game already in odds_{date}.csv is skipped, so a
+    #    second run tonight buys only what is new. `--refresh` on
+    #    data.odds_lines re-buys everything at a later line.
+    _run("4/6  Strikeout props (1 credit per game not yet priced)",
          ["-m", "data.odds_lines", game_date], args.dry_run)
 
     # 5. Free, local, and the step that was running too early.
@@ -205,8 +274,11 @@ def main():
                 print(f"  cache/{name}.csv  ({stamp} UTC)")
             else:
                 print(f"  cache/{name}.csv  -- not written")
+        credit_report(game_date)
+        # One command. score_slate grades the slips as steps 6-10 now,
+        # reusing the Statcast refresh it already did rather than making
+        # a second identical one.
         print("\n  After the games: python score_slate.py " + game_date)
-        print("                    python score_slips.py " + game_date)
     return 0
 
 

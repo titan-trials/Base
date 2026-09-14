@@ -1,6 +1,14 @@
 """
 Grade last night's bet slips, whole slips rather than legs.
 
+score_slate.py calls this as its steps 6-10, handing over the Statcast
+refresh it has already done, so the normal way to run it is just
+
+    python score_slate.py 2026-09-13
+
+It also stands alone, which is useful for re-grading slips without
+re-running the whole hitter scorer:
+
     python score_slips.py                 # yesterday
     python score_slips.py 2026-09-13
     python score_slips.py --dry-run       # grade, print, write nothing
@@ -70,7 +78,7 @@ COUNTS = {"prob_hrr_over_": "hrr", "prob_tb_over_": "total_bases",
           "prob_hits_over_": "hits"}
 
 
-def step(n, total, label, detail=""):
+def step(n, label, detail="", total=5):
     """
     A numbered banner, the same shape run_slate prints.
 
@@ -224,23 +232,31 @@ def report(scored):
               f"({hit / tot:.0%})" if tot else "")
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Grade committed bet slips.")
-    ap.add_argument("date", nargs="?", default=None)
-    ap.add_argument("--dry-run", action="store_true",
-                    help="grade and print, but do not append to slip_log")
-    args = ap.parse_args()
-    date = args.date or (pd.Timestamp.today()
-                         - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+def run(date, hitters=None, dry_run=False, first_step=1, steps=5):
+    """
+    Grade one date's slips.
+
+    `hitters` lets a caller hand in actuals it has ALREADY loaded. That is
+    the whole reason this is a function: score_slate refreshes ~270
+    players over the network and it takes minutes, and running the two
+    scorers back to back used to do that twice for identical data. Passed
+    in, step 2 is a no-op and the second refresh disappears.
+
+    `first_step` / `steps` let the banners join a longer sequence when
+    score_slate calls this as one of its own numbered stages, instead of
+    restarting the count at 1 in the middle of someone else's output.
+    """
+    def _s(n, label, detail=""):
+        step(first_step + n - 1, label, detail, total=steps)
 
     STEPS = 5
-    print(f"SCORE SLIPS {date}")
+    print(f"SCORE SLIPS {date}" if first_step == 1 else "")
 
     # 1. The committed slips. Nothing downstream is possible without
     #    them, and their ABSENCE is the most likely failure on any date
     #    predicted before slips.py existed -- so it is step one and it
     #    explains itself rather than just exiting.
-    step(1, STEPS, "Committed slips", f"cache/slips_{date}.csv")
+    _s(1, "Committed slips", f"cache/slips_{date}.csv")
     path = os.path.join(CACHE, f"slips_{date}.csv")
     if not os.path.exists(path):
         print(f"  Not found.\n"
@@ -263,19 +279,21 @@ def main():
 
     # 2. The slow one, and the one that fails when the games are not
     #    final yet. Statcast posts a few hours after the last out.
-    step(2, STEPS, "Hitter outcomes",
-         "Statcast refresh + official boxscore lines")
-    try:
-        hitters = hitter_actuals(slips, date)
-    except SystemExit as exc:
-        print(f"  {exc}")
-        return 1
+    _s(2, "Hitter outcomes",
+       "reused from the hitter scorer" if hitters is not None
+       else "Statcast refresh + official boxscore lines")
+    if hitters is None:
+        try:
+            hitters = hitter_actuals(slips, date)
+        except SystemExit as exc:
+            print(f"  {exc}")
+            return 1
     print(f"  {len(hitters)} hitter game lines.")
 
     # 3. Separate call, separate failure. A slate whose arms cannot be
     #    graded is still worth grading for its bats, so this one does not
     #    stop the run.
-    step(3, STEPS, "Pitcher outcomes", "official pitching lines")
+    _s(3, "Pitcher outcomes", "official pitching lines")
     arms = slips[slips["kind"] == "arm"]
     if not len(arms):
         pitchers = {}
@@ -290,12 +308,12 @@ def main():
                   f"against the model.")
         print(f"  {len(pitchers)} starter lines.")
 
-    step(4, STEPS, "Grade", "a slip lands only when every leg does")
+    _s(4, "Grade", "a slip lands only when every leg does")
     scored, legs = grade(slips, hitters, pitchers)
     report(scored)
 
-    step(5, STEPS, "Running record", "cache/slip_log.csv")
-    if args.dry_run:
+    _s(5, "Running record", "cache/slip_log.csv")
+    if dry_run:
         print("  --dry-run: nothing written.")
         return 0
 
@@ -337,6 +355,17 @@ def main():
             print(f"  {t:8} {len(sub):>5} {exp:>9.2f} {act:>4.0f} "
                   f"{act - exp:>+8.2f} {verdict:>28}")
     return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Grade committed bet slips.")
+    ap.add_argument("date", nargs="?", default=None)
+    ap.add_argument("--dry-run", action="store_true",
+                    help="grade and print, but do not append to slip_log")
+    args = ap.parse_args()
+    date = args.date or (pd.Timestamp.today()
+                         - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    return run(date, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

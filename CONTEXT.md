@@ -14,6 +14,290 @@ real, useful outcome of the project, not a failure to fix.
 
 ---
 
+## V12 (Sep 13-14, 2026) — the front page, a betting record, and two markers measured before being built
+
+The theme of this version is **committing a number before it can be
+graded, and measuring a feature before building it**. Three things that
+looked like UI work turned out to be evidence problems, and two feature
+requests were answered by a lab script rather than a feature.
+
+### Bet slips, committed before first pitch
+
+Nolan asked which of the previous night's slips hit. They could not be
+answered: the Bet ready tab built slips at render time, so they existed
+only as pixels, and re-deriving them the next morning would have graded
+today's code against last night's games.
+
+`slips.py` now writes `cache/slips_{date}.csv` before first pitch (step
+6/6 of `run_slate`), and the dashboard READS that file instead of
+rebuilding. Two consequences beyond gradeability: the slip on screen and
+the slip in the log are the same object, and there is exactly ONE
+definition of what a slip is — building it in two places is how the card
+and the copy text drifted apart once already.
+
+`score_slips.py` grades them, and is now **steps 6-10 of
+`score_slate`**. Run back to back the two scorers refreshed the same ~270
+players over the network TWICE; the actuals from step 3 are handed
+straight over and step 7 is a no-op. Verified with a stub that raises if
+the loader is called at all: 0 refreshes.
+
+**The output is expected-vs-actual, never a win/loss record**, because a
+record cannot be read here:
+
+| tier | slips/night | expected hits | one hit every | nights to detect 20% miscalibration |
+|---|---|---|---|---|
+| SAFE | 5 | 1.74 | 0.6 nights | ~38 |
+| MEDIUM | 5 | 0.33 | 3 nights | ~286 |
+| MIXED | 5 | 0.18 | 5 nights | ~526 |
+| LOTTO | 5 | 0.02 | **56 nights** | ~5,536 |
+
+A LOTTO record of 0-for-200 is exactly what a 0.4% bet should look like.
+SAFE is the only tier that will say anything this season. The ± is the
+**Poisson-binomial** deviation, `sqrt(Σ p(1-p))` — these slips vary too
+much in probability for `sqrt(n·p̄(1-p̄))`, which would overstate the bar
+several times over.
+
+**The one thing this data can measure that nothing else can:** slips are
+logged with whether they reuse a game, so pooling correlated slips
+separately turns the correlation warning into a number. Correlated legs
+land together more often than the product implies, so the "all hit"
+figure is too LOW by whatever that gap turns out to be.
+
+Three bugs, all found by reading real output, none of which raised
+anything:
+
+1. **Nested props.** Avoiding only a repeated GAME produced `Yandy Diaz
+   Hit 73.2% + Hits 1.5 33.1% + Hits 2.5 10.0%` — one bet wearing three
+   labels, worth its smallest leg rather than the product. Each leg must
+   now be a different PLAYER, the only rule that is safe without
+   hard-coding which props imply which.
+2. **The arm leg surfaced the fakest edges.** Ranking by |edge| put three
+   `Over 3.5 K` lines on top (+35.6%, +26.1%, +17.9%) — exactly the
+   compression bias. Demoting them was not enough; a suspect arm (an OVER
+   at a line ≤ 4.5) is now EXCLUDED from slips entirely. A leg the model
+   is measurably wrong about does not belong on a bet slip at any rank.
+3. **The arm leg recommended the side the model dislikes.** It always
+   wrote `Over L` with the signed edge, so `Glasnow Over 7.5 K, 29.7%,
+   market 42%, -12.1%` appeared as a pick. A negative edge on the over is
+   a positive edge on the under. Now `Under 7.5 K — 70.3%, +12.1%`.
+
+### The compression: under-informed, not mis-calibrated
+
+`lab_k_spread.py`, 202 pitcher-nights over 10 captured slates:
+
+```
+model_k = 2.11 + 0.67 × market_k    [0.61, 0.74]    r = 0.82
+```
+
+Stable night to night, 0.52 to 0.75. **But this is not a defect to fix by
+stretching.** Binned against what actually happened, for pitchers with
+10+ starts of history, the model sits on the diagonal in **5 of 5 bins**
+for both strikeouts and batters faced, and `actual_k` on `model_k` gives
+slope 1.11 [0.86, 1.36].
+
+A correctly shrunk estimator IS narrower than the truth — that is what
+shrinkage is for, and `sd(projection) = r × sd(true value)`. Against its
+own information content the model is at 82% of optimal width; the market
+is at 85%. **The gap to the market is information, not calibration**
+(r 0.46 vs 0.55). Stretching the output would break the one thing that
+currently holds.
+
+### The relief tier, and an opener bug it uncovered
+
+The largest error in the model was pitchers with no starting history:
+projected 22.6 batters faced, actual 10.4, **−12.2 on 20 starts**. The
+names showed two populations, not one — Derek Law 6, Tim Mayza 9, Taylor
+Clarke 6 are *relievers* in bulk games, while Jedixson Paez 23, Andrew
+Sears 23 are genuine debut STARTERS the existing prior already handles.
+
+`WorkloadModel.fit` was **already computing `relief_bf`** and nothing
+read it. Riley Cornelio was classified `role = "reliever"`, that
+classification was written into the slate file, and he was projected for
+22.65 batters anyway. Fixed with a third tier in `_opener_entry`: relief
+work shrunk toward the OPENER population (`RELIEF_PRIOR_APPEARANCES = 12`).
+
+**The test then caught a live bug nobody had noticed.** `bf_pmf` and
+`expected_bf` disagreed by six batters for every opener, and had since
+the opener tier landed:
+
+```
+OPENER     expected_bf   7.01   bf_pmf mean  13.01
+RELIEVER   expected_bf   4.70   bf_pmf mean  13.01
+```
+
+The league PMF is fitted on non-opener starts so its support bottoms out
+at 13, and exponential tilting cannot pull a distribution below its own
+support. Since `k_count_distribution` reads `bf_pmf` and not
+`expected_bf`, **every opener's strikeout probabilities were computed off
+a 13-batter distribution** while the headline said 7. Fixed by fitting a
+second PMF from opener starts plus relief appearances.
+
+The lesson: neither number was wrong on its own. They were wrong
+*relative to each other*, and no test compared them. `test_relief_tier.py`
+asserts `bf_pmf mean == expected_bf` for all four tiers.
+
+### Versus-opponent: real, and it does not repeat
+
+`lab_opponent.py`, 50 starters, 4,599 starts, 111,313 PA. Asked for as a
+feature; answered as a measurement.
+
+The naive version is three claims stacked, and only one is new
+information. Testing the RESIDUAL after both main effects, against a
+parametric bootstrap null:
+
+```
+real effect       2.3% of K rate       z = +5.32, p < 0.001
+positive control  3.0% injected   ->   3.0% recovered
+```
+
+So something IS there. Then the decisive test — does it repeat?
+
+```
+split-half r = +0.0185   null -0.0008 ± 0.0295   z = +0.66
+```
+
+**It does not.** The overdispersion is drift and within-start clustering,
+not a property of the pairing. Stronger than a sample-size objection:
+even with unlimited data there would be nothing to predict with. No
+vs-opponent column was built.
+
+> A first attempt used a label shuffle as its control and the control came
+> back MORE dispersed than the real data (1.268 vs 1.150). Shuffling the
+> opponent labels destroys the opponent main effect, which is real and
+> large. The null has to preserve the fitted main effects and re-draw only
+> the coin flips.
+
+**What survives:** recent form, pitch counts, home/away — the lighter of a
+pitcher's two halves still holds a median 46 starts and 1,069 PA. Shown
+as a record, not a signal, in the new Recent form panel
+(`pitcher_form.py` → `cache/pitcher_form_{date}.csv`, ~25 KB a night,
+because the statcast caches are 1.2 GB and the deployed app can never
+read them).
+
+### Two hot/cold markers: one dead, one built on the other signal
+
+**The hitter marker, after 13 slates: nothing.**
+
+```
+Hot    predicted 36.0%   actual 33.5%
+Cold   predicted 33.9%   actual 32.1%
+HOT minus COLD residual  -0.71 points ± 2.32   z = -0.31
+```
+
+Both groups undershot by about the same amount — the model's own drift,
+not a form effect — and the sign is backwards. Not a kill at 490 hot
+rows, but not a licence to build a second one on faith.
+
+So the pitcher version was **tested on history before being built**
+(`lab_pitcher_form.py`, 4,599 cached starts), because the live log would
+take a decade at fifteen starters a night:
+
+| feature | r | p | bottom vs top decile |
+|---|---|---|---|
+| recent K rate, z | +0.019 | 0.210 | +1.13% K rate |
+| **fastball mph** | **+0.052** | **0.001** | **+2.19% K rate** |
+| recent K rate (shuffled) | +0.007 | 0.656 | +0.45% |
+| velocity (shuffled) | +0.001 | 0.963 | −0.49% |
+
+**The obvious version fails and the physical one works** — a direct
+measurement beats an outcome filtered through defence and luck, exactly
+as `context-features-availability.md` predicted for exit velocity. The
+effect is ~2.2 points of K rate between deciles, about **half a strikeout
+over 23 batters**. Velocity does NOT predict batters faced (r = 0.015,
+p = 0.32), so it leaves the outs prop alone.
+
+Two of my own controls caught bugs in the test itself:
+
+- Shuffling the feature **within a pitcher** preserves every
+  between-pitcher difference, so the "null" returned z = +2.5 with the
+  pairing already destroyed. Fixed by de-meaning both feature and
+  residual within pitcher.
+- De-meaning within (pitcher, MONTH) to remove the seasonal velocity arc
+  returned r = −0.31, z = −14.2 — an effect bigger than anything real,
+  manufactured by de-meaning inside ~5 observations whose rolling windows
+  overlap the residuals. Removing the LEAGUE's month effect instead left
+  the result unchanged, so the season was never the explanation.
+
+Shipped as `velo_base` / `velo_recent` / `velo_drop` / `velo_state` on
+`pitchers_{date}.csv`, cut at **±0.5 mph** (chosen from the data: 1.85
+points of K rate at z = +3.8, fires on 40% of starts). Written by
+`pitcher_form.py` and carried into `pitcher_row_log.csv` by
+`_log_pitcher_rows`, which is the only place it sits beside the outcome.
+Same contract as the hitter marker: shown, logged, **fed to nothing**.
+
+### Per-pitcher strikeout lines, and two guards
+
+`predict_slate` already wrote `k_dist` — the whole PMF as a
+comma-separated string. Summing `k_dist[6:]` reproduces the stored
+`prob_k_over_5.5` to seven decimals, so **any line, any pitcher, any
+slate already on disk**, nothing re-run. The fixed 5.5/6.5 columns are
+replaced by Line / Over / Mkt / Books / Edge, with the line taken from
+the captured odds where one exists.
+
+Two guards the data argued for:
+- **Thin lines are suppressed.** Joe Ryan's only captured line on 9/13
+  was 3.5 from THREE books, read as a +21-point edge. A 132-start starter
+  does not get a 3.5 line unless those books know something. Edge is
+  uncoloured below four books.
+- **`Edge` uses fixed ±5-point thresholds, not quartiles.** A quartile
+  always paints a top quarter, so on a night of broad agreement it would
+  colour the largest trivial disagreement and call it a find.
+
+### Odds credits: a re-pull was re-buying the whole slate
+
+`fetch_slate_odds` only skipped games that had already STARTED. A game
+already captured but not yet started was fetched again at full price —
+the per-event endpoint has no idea it already sold you that game. Pulling
+at 10am and again at 6pm cost 15 + 10 = **25 credits for one slate**, or
+~20 nights of a 500-credit month instead of ~33.
+
+Now **incremental by default** (matched on home/away team names, since
+the output file has no `event_id`), with `--refresh` to re-buy at a later
+line. Verified on the real 9/13 file: 14 captured, 15 offered, exactly 1
+fetched. `cache/credit_log.csv` records every call and `run_slate` ends
+with a CREDITS block whose "Plan says" figure is the API's own
+`x-requests-remaining`.
+
+### The front page, and the reload
+
+The Slate page was rebuilt around what is true TONIGHT rather than a
+ranked list of twenty hitters that looked identical every night: a
+templated summary line, a POOL of finding cards that fire when their
+condition is met, every game as a clickable row, and an in-place
+drill-down carrying the team model's runs and scorers (**no winner** —
+the win probability was measured at Brier 0.237-0.265 against 0.25 for a
+coin flip and only ever spanned 45-57%).
+
+Clicking a game used to reload the page, because `<a href="?game=">` is a
+real browser navigation that Streamlit does not intercept. The clock is
+now a button, so it reruns over the websocket; the rest of the row stays
+HTML on a shared grid so the columns still line up. Prop selection is
+chips rather than a dropdown, for the same reason.
+
+Side effect worth keeping: `st.query_params["game"] = x` preserves other
+keys, so the saved-hitter list survives on its own. The old link had to
+re-append `&picks=` by hand or opening a game silently emptied the
+sidebar.
+
+### Numbered steps, and error bars on the level check
+
+`run_slate` (6), `score_slate` (12) and `score_slips` (5) all print
+numbered banners now. The argument is strongest for `score_slate` step 3:
+it refreshes ~270 players over the network, takes minutes, and is the
+step most likely to fail because Statcast posts hours behind the last
+out. It used to be one undifferentiated wall.
+
+The Results level check now carries a standard error and a verdict. The
+−0.4 strikeout bias was NOT corrected for: t = −2.36 across thirteen
+September dates, with date means swinging −1.11 to +1.67 and their spread
+barely above sampling noise. September is when outings shorten anyway, so
+an offset fitted there would partly be fitting a seasonal effect. The ±
+is measured **across slates**, not across starts — fifteen starters on
+one night share a league-wide pattern of bullpen use and are not fifteen
+independent draws.
+
+---
+
 ## V11 (Sep 6-12, 2026) — three bugs found by looking at outputs, and a new prop
 
 Nothing in this version came from planning a feature. Every item is
@@ -1225,7 +1509,36 @@ about half a percent of squared error.
 
 ---
 
-## Current State (as of Jul 31, 2026)
+## Current State (as of Sep 14, 2026)
+
+The live system is the nightly loop below: `run_slate.py` before the games,
+`score_slate.py` after, and a six-tab Streamlit dashboard. What it is
+actually good at, measured rather than claimed:
+
+- **The pitcher strikeout model is the strongest component.** It sits on
+  the diagonal in 5 of 5 bins against real outcomes for pitchers with 10+
+  starts of history, and its projections are at 82% of their own optimal
+  width. Its gap to the market (r 0.46 vs 0.55) is information, not
+  calibration.
+- **The hitter props are calibrated but barely separate players** — 1.2x
+  between the best bat on the board and the median on the common props.
+  The low-base-rate props (HR 3.7x, TB 3.5 2.8x) are where the model
+  actually distinguishes anyone, which is what the Bet ready tab's LOTTO
+  tier is built on.
+- **The team win model is off** — Brier 0.237-0.265 against 0.25 for a
+  coin flip, spanning only 45-57%. Its runs and expected scorers are
+  still shown; the winner is not.
+- **Four things are shown and fed to nothing on purpose**, each waiting
+  on its own Results row: the hitter hot/cold marker (13 slates, nothing),
+  the pitcher velocity marker (measured prior, no live slates), home/away
+  splits, and the slip record.
+
+Everything below this line about V1-V4 AUC figures is the ORIGINAL
+research phase and is kept for the negative results it records. It
+describes a different, single-player codebase and should not be read as
+the current system.
+
+### The original research phase (as of Jul 31, 2026)
 - **Best working result: team win probability**, AUC 0.582 (opponent
   strength + rolling runs-allowed as a pitching-quality proxy). Real
   discrimination in both directions (not a majority-class collapse) —
@@ -1260,6 +1573,58 @@ about half a percent of squared error.
 ---
 
 ## How To Run
+
+### The nightly loop (V12) — two commands
+
+```powershell
+# BEFORE the games. Six steps in dependency order; only step 4 costs
+# anything. Odds pulls are INCREMENTAL -- a game already in
+# odds_{date}.csv is skipped -- so a second run tonight buys only what is
+# new. Ends with a CREDITS block.
+python run_slate.py                    # today
+python run_slate.py 2026-09-14
+python run_slate.py --no-odds          # free: lineups, predictions,
+                                       # recent form and slips only
+python run_slate.py --dry-run          # print the plan, spend nothing
+
+#   1/6  Lineups          check_lineups.py
+#   2/6  Predictions      predict_slate.py   -> slate_, pitchers_, teams_
+#   3/6  Recent form      pitcher_form.py    -> pitcher_form_, velo marker
+#   4/6  Strikeout props  data.odds_lines    -> odds_            [COSTS]
+#   5/6  Model vs market  compare_market.py  -> market_compare_
+#   6/6  Commit slips     slips.py           -> slips_
+
+# To deliberately re-buy a later, stronger line on games already priced:
+python -m data.odds_lines 2026-09-14 --refresh
+
+# AFTER the games. Twelve steps; slips are graded as 6-10, reusing the
+# Statcast refresh step 3 already did rather than making a second one.
+python score_slate.py 2026-09-14
+
+# Standalone re-grade, when the hitter pass does not need re-running:
+python score_slips.py 2026-09-14 --dry-run
+```
+
+### The labs — measure before building
+
+```powershell
+python lab_opponent.py        # sample | effect | persist
+python lab_k_spread.py        # market | spread | calib
+python lab_pitcher_form.py    # velocity vs recent-K-rate form
+python flag_lab.py --origins 3
+```
+
+### Tests
+
+```powershell
+python test_workload.py       # 32 assertions on the workload model
+python test_relief_tier.py    # the four expected_bf tiers, and that
+                              # bf_pmf agrees with expected_bf
+python test_slips.py          # slip building and slip grading
+```
+
+### Older single-purpose scripts
+
 ```powershell
 # Activate environment
 .\venv\Scripts\Activate.ps1
@@ -1358,6 +1723,30 @@ baseball_predictor/
 ├── train_multi_targets.py          # HR / HR-next-3 / walk, side by side
 ├── train_pitch_matchup.py          # HR + pitch-type matchup + fatigue --
 │                                    # the best HR result found (AUC 0.565)
+├── run_slate.py                     # the nightly pipeline, 6 numbered steps,
+│                                    # ends with the CREDITS ledger
+├── predict_slate.py                 # every prop for a slate, written BEFORE
+│                                    # first pitch (preserve_committed_rows)
+├── pitcher_form.py                  # recent form + the VELOCITY marker.
+│                                    # Runs here rather than in the dashboard
+│                                    # because it reads the 1.2 GB statcast
+│                                    # caches, which are untracked forever
+├── slips.py                         # what a bet slip IS -- one definition,
+│                                    # imported by dashboard.py, written to
+│                                    # slips_{date}.csv before first pitch
+├── score_slate.py                   # 12 numbered steps; slips are 6-10
+├── score_slips.py                   # whole-slip grading, expected vs actual
+├── compare_market.py                # model against captured closing lines
+├── dashboard.py                     # Streamlit: Slate / Games / Pitchers /
+│                                    # All hitters / Bet ready / Results
+├── lab_opponent.py                  # does a vs-opponent effect PERSIST? (no)
+├── lab_k_spread.py                  # is the model compressed? (no -- under-
+│                                    # informed, which is a different fix)
+├── lab_pitcher_form.py              # velocity vs recent-K form (velocity wins)
+├── flag_lab.py                      # feature flags over multiple origins
+├── test_workload.py                 # \
+├── test_relief_tier.py              #  > the tests that actually catch things
+├── test_slips.py                    # /
 ├── debug_schedule.py                # diagnostic used to find the team dropna() bug
 ├── debug_alvarez.py                 # diagnostic used to find the accented-name bug
 ├── requirements.txt
@@ -1402,6 +1791,41 @@ Delete the relevant file(s) in `cache/` to force a fresh pull:
   bit us once already when chase_rate was added without clearing the
   player cache first.
 - If you want genuinely current data for a season still in progress.
+
+### What is TRACKED in git, and the rule behind it (V7-V12)
+
+`.gitignore` ignores `cache/*` and then negates the exceptions. The rule
+it keeps re-learning, stated at the top of that file:
+
+> **Anything the dashboard READS, or any record that ACCUMULATES, has to
+> be tracked. Everything else in `cache/` is regenerable; these are not.**
+
+It has bitten more than once — the Results tab said "No slates scored
+yet" for a day while `scoring_log.csv` sat populated on disk.
+
+| file | why tracked | size |
+|---|---|---|
+| `slate_*.csv` | the predictions, committed pre-game | ~130 KB/night |
+| `pitchers_*.csv` | Pitchers tab, and the velocity marker | ~25 KB |
+| `pitcher_form_*.csv` | Recent form panel — the statcast caches behind it are 1.2 GB and never tracked | ~25 KB |
+| `slips_*.csv` | the slips, committed pre-game | ~25 KB |
+| `slip_log.csv` | accumulates, one row per slip per night | small |
+| `odds_*.csv`, `market_log.csv` | **the least regenerable files here** — historical odds are not on the free tier, so a night not captured before first pitch can never be benchmarked by anyone, ever | few KB |
+| `credit_log.csv` | the CREDITS block; accumulates | few hundred B |
+| `market_compare_*.csv` | Pitchers tab market block | few KB |
+| `scoring_log.csv`, `pitcher_scoring_log.csv`, `form_log.csv`, `team_scoring_log.csv` | the running records | few hundred KB/season |
+| `teams_*.csv`, `team_lines.csv` | team model input and record | ~1 MB total |
+
+**Never tracked:** `statcast_player_*.csv` (~1.2 GB), `statcast_pitcher_*.csv`,
+`batting_lines.csv`, `lineup_slots.csv`, `game_context.csv`,
+`pitchmix_*`/`pitchcontrol_*` (~1,900 files). Losing these costs time, not
+information — but `.git` was 1.1 GB once, which is why they stay out.
+
+`dashboard.py` imports numpy, pandas, streamlit, altair and **one** project
+module — `slips.py`, which defines what a slip is and reads no cache of its
+own. That header comment in `.gitignore` used to claim it imported no
+project modules and read only `slate_*.csv`; both had quietly stopped being
+true, and it was the justification for the whole file.
 
 ---
 
@@ -1496,12 +1920,31 @@ Delete the relevant file(s) in `cache/` to force a fresh pull:
 ---
 
 ## Known Issues / Technical Debt
-- **The zero-start batters-faced prior is about three innings too
-  generous** (V11). Measured on 11 graded starts: projected 22.6, actual
-  12.8. These are openers and bullpen games, and the prior was measured
-  from career-thin starters rather than from "projected starter who is
-  actually an opener". The per-pitcher row log is accumulating the
-  evidence; do not tune it on eleven rows.
+- ~~**The zero-start batters-faced prior is about three innings too
+  generous**~~ (V11) — **FIXED in V12.** It was two populations, not a
+  bad prior: relievers in bulk games (Derek Law 6 batters, Tim Mayza 9)
+  averaged in with genuine debut starters (Paez 23, Sears 23). A third
+  tier in `_opener_entry` projects relief-only arms from their own relief
+  workload shrunk toward the opener population. `relief_bf` had been
+  computed and unread the whole time.
+- **The model's strikeout projections are ~82% of their optimal width**
+  (V12), and that is NOT a calibration bug — a correctly shrunk estimator
+  is narrower than the truth. The 0.67 slope against the market is an
+  INFORMATION gap (r 0.46 vs 0.55), so the fix is features the model does
+  not have — announced pitch limits, rest and injury news, umpire,
+  catcher — and emphatically not stretching the output.
+- **A uniform −0.4 strikeout bias** on pitchers with 10+ starts of
+  history (V12). t = −2.36 over thirteen September dates, date means
+  swinging −1.11 to +1.67. Deliberately NOT corrected for: September is
+  when outings shorten, so an offset fitted there would partly be fitting
+  a season. The Results level check now carries the error bar that will
+  eventually settle it.
+- **Two markers are shown and fed to nothing, by design** (V12). The
+  hitter hot/cold marker has 13 slates and says nothing (hot minus cold
+  −0.71 points, z = −0.31). The pitcher VELOCITY marker arrived with a
+  measured reason to exist (4,599 cached starts, r = 0.052, p = 0.001,
+  ~2.2 points of K rate between deciles) but has zero live slates. Neither
+  enters the model until its own row in Results says so.
 - **A pitcher returning from a long layoff gets the debutant prior.**
   `career_starts` and `days_since_last_start` are now exported and marked
   but not used by the model. A rehab return is on a shorter leash than a
@@ -1519,6 +1962,16 @@ Delete the relevant file(s) in `cache/` to force a fresh pull:
 - **Total bases pools two models across 2026-09-06**, the date
   `PER_HITTER_SHAPE` was turned on. Read a step change there as the flag,
   not as noise.
+- **No hitter-prop odds exist anywhere in this project** (V12), so every
+  hitter number is model-only and "market disagreement" is not computable
+  for a bat at any threshold. Player props are charged per event and the
+  free tier is 500 credits a month, so the budget goes to strikeouts. The
+  Bet ready tab uses LIFT over the slate median as the honest stand-in and
+  says so; it is not the same claim.
+- **`velo_state` is "Unknown" for any starter with no statcast cache**
+  (V12) — a debut, or a pitcher predict_slate named before his pull ran.
+  Absent rather than wrong, but it means the marker's live sample grows
+  slower than fifteen a night.
 - **The team model is graded but unread** (V11). `teams_*.csv` and
   `team_scoring_log.csv` keep being written; the tab is off. It has no
   home-field term — the measured home-minus-away residual across four
@@ -1578,6 +2031,30 @@ Delete the relevant file(s) in `cache/` to force a fresh pull:
     larger bulk Statcast pull deferred in V2).
   - If pybaseball's FanGraphs endpoints get fixed upstream, revisit
     `data/pitching_data.py` to simplify back to a direct FanGraphs pull.
+
+### V12 ✅ (Sep 13-14, 2026) — commit it before you grade it
+  Slips committed before first pitch and graded after; the relief tier
+  and the opener PMF bug; per-pitcher strikeout lines from the stored
+  `k_dist`; incremental odds pulls and a credit ledger; numbered steps in
+  all three runners; the Slate page rebuilt; the velocity form marker.
+  Two feature requests answered with a lab script instead of a feature
+  (vs-opponent does not persist; recent-K-rate form is noise).
+
+### NEXT — what the evidence points at, in order
+  1. **The information gap to the market** (r 0.46 vs 0.55). Not a
+     calibration fix — the model is at 82% of its own optimal width and
+     sits on the diagonal. It needs things it does not have: announced
+     pitch limits, rest and injury news, umpire, catcher, weather.
+  2. **Let the two markers speak.** The pitcher velocity marker has a
+     measured prior (~+0.5 K hot minus cold) and zero live slates; the
+     hitter marker has 13 slates and nothing. Neither enters the model
+     until its own Results row says so.
+  3. **The correlation number.** Slips are logged with whether they reuse
+     a game. Once SAFE has ~40 nights, the gap between correlated and
+     clean slips IS the correlation, and the "all hit" figure can stop
+     being too low by an unknown factor.
+  4. **`prob_k` is still written and never graded** — the truth column is
+     already in the PA table, it needs adding to `BINARY_PROPS`.
 
 ---
 

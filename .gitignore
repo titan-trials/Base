@@ -97,6 +97,12 @@ cache/*
 !cache/odds_*.csv
 !cache/market_log.csv
 
+# One row per odds call: how many events were fetched, how many were
+# skipped as already underway, and what the API said was left on the plan.
+# Accumulates, is not regenerable, and is what run_slate's CREDITS block
+# reads. A few hundred bytes a night.
+!cache/credit_log.csv
+
 # Read by the pitcher tab's market block. Derived from the two files
 # above, so it COULD be regenerated -- but only by running
 # compare_market.py, which the deployed app cannot do. Same rule as

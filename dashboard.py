@@ -1687,6 +1687,10 @@ with tab_pitch:
                 pit.get("days_since_last_appearance",
                         pit.get("days_since_last_start")), errors="coerce"),
             "Role": pit.get("role"),
+            # Fastball mph over his last three starts against his own
+            # baseline. Written by pitcher_form.py, which can read the
+            # statcast caches this app never will.
+            "Velo": pd.to_numeric(pit.get("velo_drop"), errors="coerce"),
             "BF": pd.to_numeric(pit["expected_bf"], errors="coerce"),
             "K": pd.to_numeric(pit["expected_k"], errors="coerce"),
         })
@@ -1821,6 +1825,16 @@ with tab_pitch:
                 lambda col: [f"color:{_css_var('warn')}"
                              if v in ("opener", "reliever", "unknown") else ""
                              for v in col], subset=["Role"])
+        if "Velo" in pit_view:
+            # Green up, amber down, nothing in between. The cut is the
+            # same 0.5 mph pitcher_form.py uses, which was chosen from
+            # 4,599 cached starts rather than picked round.
+            pit_styled = pit_styled.apply(
+                lambda col: [
+                    "" if pd.isna(v) or abs(v) < 0.5 else
+                    f"color:{_css_var('b4ink')}" if v > 0 else
+                    f"color:{_css_var('warn')}" for v in col],
+                subset=["Velo"])
         if "Edge" in pit_view:
             pit_styled = pit_styled.apply(pit_edge_fill, subset=["Edge"])
         if "Books" in pit_view:
@@ -1828,6 +1842,8 @@ with tab_pitch:
         pit_fmt = {lab: "{:.1%}" for lab in PIT_PROPS}
         pit_fmt.update({"BF": "{:.1f}", "K": "{:.1f}", "Starts": "{:.0f}",
                         "Rest": "{:.0f}"})
+        if "Velo" in pit_view:
+            pit_fmt["Velo"] = "{:+.1f}"
         for _c, _f in (("Line", "{:.1f}"), ("Over", "{:.1%}"),
                        ("Mkt", "{:.1%}"), ("Edge", "{:+.1%}"),
                        ("Books", "{:.0f}")):
@@ -1866,6 +1882,21 @@ with tab_pitch:
                      "'reliever' pitches regularly but has not started. "
                      "'unknown' is a debut or a long layoff, and gets the "
                      "new-pitcher prior."),
+            "Velo": st.column_config.Column(
+                width=58,
+                help="Fastball mph over his last three starts against his "
+                     "own baseline — four-seam, sinker and cutter only, "
+                     "because a curveball's speed moves for different "
+                     "reasons. Measured over 4,599 cached starts: a "
+                     "starter in the bottom decile of this against one in "
+                     "the top differs by 2.2 points of strikeout rate, "
+                     "about half a strikeout over 23 batters (r = 0.052, "
+                     "p = 0.001, seasonal arc removed). The obvious "
+                     "version of this marker — recent strikeout RATE — was "
+                     "tested at the same time and is noise (p = 0.21).\n\n"
+                     "Shown only. The model does not use it, and will not "
+                     "until it has graded itself on live slates; the "
+                     "Results tab is where that appears."),
             "BF": st.column_config.Column(
                 width=58,
                 help="Batters he is projected to face. Everything to the "
@@ -3237,6 +3268,84 @@ with tab_res:
              f'<i>not yet separable from noise</i> is not a number to '
              f'correct for — it is a number to keep watching, and this row '
              f'is the thing that will eventually say so.</div>')
+
+    # ---- the velocity marker, grading itself -------------------------
+    #
+    # Same contract the hitter hot/cold marker has: shown, logged, fed to
+    # nothing, and left to earn its way in. The difference is that this
+    # one arrived with a measured reason to exist -- 4,599 cached starts,
+    # r = 0.052, p = 0.001 with the seasonal arc removed -- rather than a
+    # hope, and the hitter version's own verdict after 13 slates was
+    # nothing at all (hot minus cold -0.71 points, z = -0.31).
+    #
+    # So this block exists to answer the same question on live slates,
+    # where it counts: does a starter whose fastball is down miss fewer
+    # bats than his own projection says?
+    # pitcher_row_log.csv is the only file where the marker sits next to
+    # the outcome: score_slate's _log_pitcher_rows copies both out of
+    # pitchers_{date}.csv after the games.
+    _vlog = None
+    _vpath = os.path.join(CACHE_DIR, "pitcher_row_log.csv")
+    if os.path.exists(_vpath):
+        try:
+            _vlog = pd.read_csv(_vpath)
+        except Exception:
+            _vlog = None
+    if (_vlog is not None and "velo_state" in _vlog.columns
+            and "expected_k" in _vlog.columns
+            and "strikeouts" in _vlog.columns):
+        _v = _vlog.dropna(subset=["velo_state", "expected_k", "strikeouts"])
+        _v = _v[_v["velo_state"].isin(["Hot", "Normal", "Cold"])]
+        if len(_v) >= 12:
+            html('<div style="font-size:15px;font-weight:640;color:var(--ink);'
+                 'margin-top:30px">Velocity marker — is it real?</div>'
+                 '<div style="color:var(--ink3);font-size:12.5px;'
+                 'margin-bottom:12px">A starter whose fastball is off his '
+                 'own norm: does he miss fewer bats than his projection '
+                 'says? Shown only — the model does not use this.</div>')
+            _vr = ""
+            for _st in ("Hot", "Normal", "Cold"):
+                _g = _v[_v["velo_state"] == _st]
+                if _g.empty:
+                    continue
+                _gap = float((_g["strikeouts"] - _g["expected_k"]).mean())
+                _se = float(_g["strikeouts"].sub(_g["expected_k"]).std()
+                            / max(len(_g) ** 0.5, 1))
+                _vr += (f'<tr><td style="font-weight:560">{_st}</td>'
+                        f'<td style="text-align:right">{len(_g)}</td>'
+                        f'<td style="text-align:right">'
+                        f'{_g["expected_k"].mean():.2f}</td>'
+                        f'<td style="text-align:right">'
+                        f'{_g["strikeouts"].mean():.2f}</td>'
+                        f'<td style="text-align:right">{_gap:+.2f}</td>'
+                        f'<td style="text-align:right;color:var(--ink3)">'
+                        f'±{_se:.2f}</td></tr>')
+            html(f'<table class="plain"><thead><tr><th>Fastball</th>'
+                 f'<th style="text-align:right">Starts</th>'
+                 f'<th style="text-align:right">Projected K</th>'
+                 f'<th style="text-align:right">Actual K</th>'
+                 f'<th style="text-align:right">Gap</th>'
+                 f'<th style="text-align:right">±</th></tr></thead>'
+                 f'<tbody>{_vr}</tbody></table>')
+            _hot = _v[_v.velo_state == "Hot"]
+            _cold = _v[_v.velo_state == "Cold"]
+            if len(_hot) >= 5 and len(_cold) >= 5:
+                _h = float((_hot.strikeouts - _hot.expected_k).mean())
+                _c = float((_cold.strikeouts - _cold.expected_k).mean())
+                _sd = _v["strikeouts"].sub(_v["expected_k"]).std()
+                _sep = float(_sd * (1 / len(_hot) + 1 / len(_cold)) ** 0.5)
+                _z = (_h - _c) / _sep if _sep else 0
+                html(f'<div style="margin-top:10px;font-size:12.5px;'
+                     f'color:var(--ink3)">Hot minus cold: '
+                     f'<b style="color:var(--ink2)">{_h - _c:+.2f}</b> '
+                     f'strikeouts ±{_sep:.2f}, z = {_z:+.1f} — '
+                     f'<b style="color:'
+                     f'{"var(--warn)" if abs(_z) > 2 else "var(--ink3)"}">'
+                     f'{"separable from noise" if abs(_z) > 2 else "not yet separable from noise"}'
+                     f'</b>. History says to expect about +0.5; on '
+                     f'{len(_v)} starts the error bar is still wider than '
+                     f'that, so this row needs a season before it means '
+                     f'anything.</div>')
 
     # ---- whole slips ------------------------------------------------
     #

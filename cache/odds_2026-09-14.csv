@@ -1,0 +1,22 @@
+market,player,line,prob_over,hold,n_books,commence_time,home_team,away_team,game_date,fetched_at_utc
+pitcher_strikeouts,Tomoyuki Sugano,2.5,0.6198708602374504,0.06076005302695542,1,2026-09-15T00:41:00Z,Colorado Rockies,San Diego Padres,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Troy Melton,3.5,0.5915279878971256,0.06079848679321764,3,2026-09-14T23:08:00Z,Toronto Blue Jays,Detroit Tigers,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Casey Mize,3.5,0.5795601552393274,0.061813186813186816,1,2026-09-15T00:41:00Z,Colorado Rockies,San Diego Padres,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Corbin Burnes,3.5,0.5733441824773093,0.06538736853697491,2,2026-09-15T01:41:00Z,Arizona Diamondbacks,Miami Marlins,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Brandon Young,3.5,0.5203045685279188,0.06071050879323181,3,2026-09-14T23:11:00Z,New York Mets,Baltimore Orioles,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Sandy Alcantara,3.5,0.4979222937876584,0.06535875675079905,2,2026-09-15T01:41:00Z,Arizona Diamondbacks,Miami Marlins,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Tomoyuki Sugano,3.5,0.4291044776119403,0.059288537549406994,1,2026-09-15T00:41:00Z,Colorado Rockies,San Diego Padres,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Dean Kremer,4.5,0.5667244367417678,0.05979560774081305,3,2026-09-14T23:41:00Z,Minnesota Twins,New York Yankees,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Reynaldo Lopez,4.5,0.5548000406040134,0.062158397385474684,4,2026-09-14T23:41:00Z,Chicago Cubs,Atlanta Braves,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Quinn Mathews,4.5,0.5504206655531736,0.06431418721334692,2,2026-09-14T23:46:00Z,St. Louis Cardinals,San Francisco Giants,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Will Warren,4.5,0.48124062031015497,0.060950071641133086,3,2026-09-14T23:41:00Z,Minnesota Twins,New York Yankees,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Landen Roupp,4.5,0.45821558229710907,0.0619905213998625,2,2026-09-14T23:46:00Z,St. Louis Cardinals,San Francisco Giants,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Nick Lodolo,4.5,0.4458598726114649,0.060175479462691195,3,2026-09-14T22:41:00Z,Cincinnati Reds,Los Angeles Dodgers,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,David Peterson,4.5,0.4401002058504533,0.06118157520030676,4,2026-09-14T23:41:00Z,Chicago Cubs,Atlanta Braves,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Casey Mize,4.5,0.43868217742651633,0.060257979474625634,1,2026-09-15T00:41:00Z,Colorado Rockies,San Diego Padres,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Kade Anderson,5.5,0.5504206655531736,0.06431418721334692,2,2026-09-15T01:39:00Z,Los Angeles Angels,Seattle Mariners,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Jonah Tong,5.5,0.48542880932556204,0.06096059113300489,3,2026-09-14T23:11:00Z,New York Mets,Baltimore Orioles,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Jose Soriano,5.5,0.4592085979482169,0.061802232854864414,3,2026-09-14T23:08:00Z,Toronto Blue Jays,Detroit Tigers,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Reid Detmers,6.5,0.5220817448448722,0.06412836405591782,2,2026-09-15T01:39:00Z,Los Angeles Angels,Seattle Mariners,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Gavin Williams,7.5,0.5521265329208724,0.062066151863885755,4,2026-09-14T22:41:00Z,Cleveland Guardians,Chicago White Sox,2026-09-14,2026-09-14T03:43:43Z
+pitcher_strikeouts,Tarik Skubal,7.5,0.5,0.06103286384976525,3,2026-09-14T22:41:00Z,Cincinnati Reds,Los Angeles Dodgers,2026-09-14,2026-09-14T03:43:43Z

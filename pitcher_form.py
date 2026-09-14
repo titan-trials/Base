@@ -54,10 +54,40 @@ K_EVENTS = {"strikeout", "strikeout_double_play"}
 # Columns read from a ~100-column, 6 MB statcast cache. Reading only these
 # cuts both by an order of magnitude, and this script opens thirty files.
 USE = ["game_pk", "game_date", "game_type", "home_team", "away_team",
-       "inning", "inning_topbot", "events", "player_name"]
+       "inning", "inning_topbot", "events", "player_name",
+       "pitch_type", "release_speed"]
 # Below this a "start" is a relief outing that happens to be in the cache,
 # and it would drag a starter's recent-form line down for no reason.
 MIN_BF = 8
+
+# ---- the velocity form marker ---------------------------------------
+#
+# Measured, not assumed. lab_pitcher_form.py ran both candidate signals
+# over 4,599 cached starts with a de-meaned within-pitcher test, a
+# shuffled null and the league's seasonal arc removed:
+#
+#     recent K rate, z     r = +0.019  p = 0.210   <- noise
+#     fastball mph         r = +0.052  p = 0.001   <- real, z = +3.2
+#
+# So this marker is built on VELOCITY and deliberately NOT on recent
+# strikeout rate, which is the obvious version and was tested and failed.
+# A physical measurement beats an outcome filtered through defence and
+# luck -- the same argument context-features-availability.md makes for
+# exit velocity on the hitter side.
+#
+# Four-seam, sinker, cutter only. A changeup's speed moves with the
+# fastball and a curveball's does not, so mixing them in measures pitch
+# selection rather than arm speed.
+FASTBALLS = {"FF", "SI", "FT", "FC"}
+# Three starts is roughly 70 batters, above the ~60 PA where a strikeout
+# rate starts to mean something, and short enough to still be "recent".
+VELO_WINDOW = 3
+# Half a mile an hour off his OWN norm. Chosen from the data rather than
+# picked round: at +/-0.5 the gap between cold and hot starts is 1.85
+# points of strikeout rate at z = +3.8, the best of the cuts tried, and
+# it fires on 40% of starts (20% each way) rather than on almost all of
+# them like the hitter marker does.
+VELO_CUT = 0.5
 
 
 def per_start(pitcher_id, keep):
@@ -100,12 +130,47 @@ def per_start(pitcher_id, keep):
                  bf=("is_pa", "sum"), k=("is_k", "sum"),
                  last_inning=("inning", "max"))
             .reset_index())
+    # Fastball-only mean speed, joined separately so a start with no
+    # fastball in it comes back NaN rather than as the mean of his
+    # breaking stuff.
+    if {"pitch_type", "release_speed"} <= set(raw.columns):
+        fb = (raw[raw["pitch_type"].isin(FASTBALLS)]
+              .groupby("game_pk")["release_speed"].mean().rename("velo"))
+        g = g.merge(fb, on="game_pk", how="left")
+    else:
+        g["velo"] = float("nan")
     g = g[g["bf"] >= MIN_BF]
     if g.empty:
         return None
     g["game_date"] = pd.to_datetime(g["game_date"], errors="coerce")
     g = g.dropna(subset=["game_date"]).sort_values("game_date", ascending=False)
     g["pitcher_id"] = int(pitcher_id)
+
+    # ---- the velocity marker, computed on the FULL cache -------------
+    #
+    # Before the head(keep) below, because the baseline has to be his
+    # whole record and the file only keeps the last ten starts.
+    #
+    # The baseline EXCLUDES the recent window. An earlier version averaged
+    # everything including the last three starts, which puts the thing
+    # being measured inside its own yardstick and shrinks every drop
+    # toward zero -- the same shape of mistake as a rolling feature that
+    # forgets to shift. lab_pitcher_form.py uses shift(1).expanding(), and
+    # this is that.
+    velo = g["velo"].dropna()               # already newest-first
+    if len(velo) >= VELO_WINDOW + 3:
+        recent = float(velo.iloc[:VELO_WINDOW].mean())
+        base = float(velo.iloc[VELO_WINDOW:].mean())
+        drop = recent - base
+        state = ("Hot" if drop >= VELO_CUT
+                 else "Cold" if drop <= -VELO_CUT else "Normal")
+    else:
+        recent = base = drop = float("nan")
+        state = "Unknown"                   # too little history to say
+    g["velo_recent"] = recent
+    g["velo_base"] = base
+    g["velo_drop"] = drop
+    g["velo_state"] = state
     g["name"] = str(raw["player_name"].iloc[0]) if "player_name" in raw else ""
     return g.head(keep)
 
@@ -153,11 +218,42 @@ def main():
     out["name"] = [names.get(pd.NA if pd.isna(p) else int(p), n)
                    for p, n in zip(out["pitcher_id"], out["name"])]
     out["game_date"] = out["game_date"].dt.strftime("%Y-%m-%d")
+    marker = (out.drop_duplicates("pitcher_id")
+                 [["pitcher_id", "velo_base", "velo_recent", "velo_drop",
+                   "velo_state"]])
     out = out[["pitcher_id", "name", "game_date", "opp", "home", "pitches",
-               "bf", "k", "last_inning"]]
+               "bf", "k", "last_inning", "velo"]]
 
     path = os.path.join(CACHE, f"pitcher_form_{date}.csv")
     out.to_csv(path, index=False)
+
+    # ---- write the marker back into pitchers_{date}.csv ---------------
+    #
+    # Additive columns only, on the file predict_slate just wrote. It goes
+    # HERE rather than in predict_slate because the velocity history lives
+    # in the statcast caches, which this script already opens and which
+    # the deployed dashboard can never read.
+    #
+    # And it has to land in pitchers_{date}.csv specifically, not just in
+    # the form file: score_slate's _log_pitcher_rows copies from there
+    # into pitcher_row_log.csv, which is the only place the marker ever
+    # sits next to the strikeout residual it has to be graded against.
+    # A marker that cannot grade itself is decoration.
+    try:
+        pit_now = pd.read_csv(pit_path)
+        pit_now = pit_now.drop(columns=[c for c in marker.columns
+                                        if c != "pitcher_id"
+                                        and c in pit_now.columns])
+        pit_now = pit_now.merge(marker, on="pitcher_id", how="left")
+        pit_now["velo_state"] = pit_now["velo_state"].fillna("Unknown")
+        pit_now.to_csv(pit_path, index=False)
+        counts = pit_now["velo_state"].value_counts().to_dict()
+        print(f"  Velocity marker written into cache/pitchers_{date}.csv: "
+              + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
+    except Exception as exc:
+        print(f"  Could not write the velocity marker back "
+              f"({type(exc).__name__}: {exc}). The form file is still "
+              f"written; the marker just will not be gradeable.")
 
     have = out["pitcher_id"].nunique()
     print(f"  {len(out)} starts for {have} pitchers "

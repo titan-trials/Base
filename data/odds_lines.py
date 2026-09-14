@@ -342,15 +342,93 @@ def _merge_capture(fresh: pd.DataFrame, path: str, keys: list,
     return combined
 
 
+CREDIT_LOG_KEY = "credit_log"
+
+
+def log_credits(game_date, call, fetched, skipped, remaining, verbose=True):
+    """
+    One row per odds call, so the month's spend is a number rather than a
+    memory.
+
+    The free tier is 500 credits a month and player props are charged PER
+    EVENT, so a fifteen-game slate is fifteen credits and a second capture
+    the same night is fifteen more. That arithmetic decides how many
+    nights of the season get benchmarked at all, and until now it existed
+    only in a docstring and in whatever the last run happened to print.
+
+    `remaining` comes from the API's own x-requests-remaining header, so
+    it is authoritative rather than something this file counts up and
+    slowly gets wrong.
+    """
+    path = cache_path(CREDIT_LOG_KEY)
+    row = {
+        "fetched_at_utc": pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "game_date": game_date, "call": call,
+        "events_fetched": int(fetched),
+        # Skipped for either reason -- already underway, or already
+        # priced. Both are credits not spent, which is what the CREDITS
+        # block in run_slate reports.
+        "events_skipped": int(skipped),
+        "credits_charged": int(fetched) if call == "props" else GAMELINE_CREDITS,
+        "credits_saved": int(skipped) if call == "props" else 0,
+        "credits_remaining": (int(remaining)
+                              if remaining not in (None, "") else None),
+    }
+    try:
+        prior = pd.read_csv(path) if os.path.exists(path) else pd.DataFrame()
+        pd.concat([prior, pd.DataFrame([row])],
+                  ignore_index=True).to_csv(path, index=False)
+    except Exception as exc:          # never fail a capture over bookkeeping
+        if verbose:
+            print(f"  (credit log not written: {exc})")
+    return row
+
+
+# Game lines are charged per market for the WHOLE slate, not per event:
+# h2h + totals, one region = 2 credits however many games there are.
+GAMELINE_CREDITS = 2
+
+
+def already_captured(game_date: str) -> set:
+    """
+    {(home_team, away_team)} already in cache/odds_{date}.csv.
+
+    The output file has no event_id -- it is keyed by market/player/line --
+    so the game is identified by its two team names, which the API returns
+    in the same spelling it writes here ("Minnesota Twins").
+    """
+    path = cache_path(f"odds_{game_date}")
+    if not os.path.exists(path):
+        return set()
+    try:
+        prior = pd.read_csv(path, usecols=["home_team", "away_team"])
+    except Exception:
+        return set()
+    return set(zip(prior["home_team"].astype(str),
+                   prior["away_team"].astype(str)))
+
+
 def fetch_slate_odds(game_date: str, markets: str = DEFAULT_MARKET,
                      regions: str = DEFAULT_REGIONS,
-                     verbose: bool = True) -> pd.DataFrame:
+                     verbose: bool = True,
+                     refresh: bool = False) -> pd.DataFrame:
     """
-    Fetch, de-vig and cache one slate's closing lines.
+    Fetch, de-vig and cache one slate's prices.
 
-    Writes cache/odds_{date}.csv. Re-running overwrites, so fetching again
-    closer to first pitch replaces an earlier, weaker line -- which is
-    usually what you want, at the cost of more credits.
+    INCREMENTAL BY DEFAULT. A game already present in cache/odds_{date}.csv
+    is skipped, because the player-props endpoint is charged PER EVENT and
+    has no idea it already sold you that game -- a second pull on a
+    fifteen-game slate used to cost fifteen more credits and re-buy nine
+    games whose price had barely moved.
+
+    On the free tier that is the difference between ~33 nights of season
+    and ~16, which is the difference between benchmarking the model and
+    not.
+
+    `refresh=True` re-buys everything at full price. That is the right
+    call when you deliberately want a later, stronger closing line on
+    games you priced early -- the earlier capture really is the weaker
+    number. It is just no longer what happens by accident.
     """
     api_key = load_api_key()
     events = list_events(api_key, game_date)
@@ -382,6 +460,21 @@ def fetch_slate_odds(game_date: str, markets: str = DEFAULT_MARKET,
     if not events:
         print(f"  Every game on {game_date} has started. Nothing fetched, "
               f"no credits spent.")
+        return pd.DataFrame()
+
+    # Games already priced. See the docstring -- this is the guard that
+    # decides how many nights of the season get benchmarked at all.
+    cached = set() if refresh else already_captured(game_date)
+    seen = [e for e in events
+            if (str(e.get("home_team")), str(e.get("away_team"))) in cached]
+    events = [e for e in events if e not in seen]
+    if seen and verbose:
+        print(f"  Skipping {len(seen)} game(s) already in "
+              f"cache/odds_{game_date}.csv -- {len(seen)} credit(s) not "
+              f"spent. Use --refresh to re-buy them at a later line.")
+    if not events:
+        print(f"  Every game on {game_date} is either underway or already "
+              f"priced. Nothing fetched, no credits spent.")
         return pd.DataFrame()
 
     n_markets = len([m for m in markets.split(",") if m.strip()])
@@ -419,6 +512,8 @@ def fetch_slate_odds(game_date: str, markets: str = DEFAULT_MARKET,
                            verbose)
     lines.to_csv(out_path, index=False)
 
+    log_credits(game_date, "props", len(events), len(started) + len(seen),
+                remaining, verbose)
     if verbose:
         print(f"\n  {len(lines)} lines from {raw['bookmaker'].nunique()} "
               f"bookmakers. Median hold {raw['hold'].median():.3f}.")
@@ -543,6 +638,8 @@ def fetch_game_lines(game_date: str, regions: str = DEFAULT_REGIONS,
     gl_path = cache_path(f"gamelines_{game_date}")
     ml = _merge_capture(ml, gl_path, ["event_id"], verbose)
     ml.to_csv(gl_path, index=False)
+    log_credits(game_date, "gamelines", len(ml), in_play,
+                headers.get("x-requests-remaining"), verbose)
     if verbose:
         print(f"  {len(ml)} games. Home favourites: "
               f"{(ml['home_win_prob_market'] > 0.5).mean():.0%}. "
@@ -557,11 +654,16 @@ if __name__ == "__main__":
     if not date:
         raise SystemExit("Usage: python -m data.odds_lines YYYY-MM-DD "
                          "[market | gamelines]")
-    market = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_MARKET
+    argv = [a for a in sys.argv[2:] if a != "--refresh"]
+    refresh = "--refresh" in sys.argv
+    market = argv[0] if argv else DEFAULT_MARKET
     if market == "gamelines":
+        # Game lines are charged per MARKET for the whole slate, not per
+        # event, so there is no per-game saving to make here -- the two
+        # credits buy every game whether you want them all or not.
         fetch_game_lines(date)
         raise SystemExit(0)
     if market not in KNOWN_MARKETS:
         print(f"  Note: '{market}' is not one of {KNOWN_MARKETS}. "
               f"Sending it anyway.")
-    fetch_slate_odds(date, markets=market)
+    fetch_slate_odds(date, markets=market, refresh=refresh)

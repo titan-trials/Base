@@ -79,6 +79,29 @@ BINARY_PROPS = {
 HRR_PREFIX = "prob_hrr_over_"
 
 
+SCORE_STEPS = 12
+
+
+def step(n, label, detail="", total=None):
+    """
+    A numbered banner, the same shape run_slate and score_slips print.
+
+    Scoring is seven things that fail independently -- the calendar guard,
+    the prediction file, a multi-minute Statcast refresh, the official
+    boxscore lines, the grade, the running log, and three separate
+    sub-scorers for the form marker, the starters and the game page. It
+    used to print them as one continuous wall, so a stall told you nothing
+    about WHERE it had stalled. That is the whole reason run_slate numbers
+    its steps, and the argument applies harder here: step 3 is the one
+    that takes minutes and the one most likely to fail, because Statcast
+    posts a few hours behind the last out.
+    """
+    print(f"\n{'=' * 72}\n{n}/{total or SCORE_STEPS}  {label}")
+    if detail:
+        print(f"  {detail}")
+    print("=" * 72)
+
+
 def load_predictions(game_date: str) -> pd.DataFrame:
     path = cache_path(f"slate_{game_date}")
     if not os.path.exists(path):
@@ -269,7 +292,13 @@ def _log_pitcher_rows(basis: pd.DataFrame, game_date: str):
              "career_starts", "days_since_last_start", "expected_bf",
              "expected_k", "expected_outs", "implied_baserunners", "k_rate",
              "batters_faced", "strikeouts", "innings_pitched",
-             "outs_recorded"]
+             "outs_recorded",
+             # The velocity form marker, carried through so it can grade
+             # ITSELF against the strikeout residual in this same file.
+             # It is fed to nothing -- same contract the hitter marker
+             # has -- so the only way it ever earns its way into the
+             # model is by these columns sitting next to the outcome.
+             "velo_base", "velo_recent", "velo_drop", "velo_state"]
             + [f"prob_k_over_{line}" for line in K_LINES]
             + [f"prob_outs_over_{line}" for line in OUTS_LINES])
     rows = basis[[c for c in keep if c in basis.columns]].copy()
@@ -898,10 +927,9 @@ def main(game_date: str = None):
     if game_date is None:
         raise SystemExit("Usage: python score_slate.py YYYY-MM-DD")
 
-    print("=" * 72)
-    print(f"SCORING SLATE: {game_date}")
-    print("=" * 72)
+    print(f"SCORE SLATE {game_date}")
 
+    step(1, "Calendar check", "are these games actually final?")
     # Check the calendar BEFORE doing anything expensive.
     #
     # load_actuals() refreshes ~270 players over the network, then checks
@@ -926,6 +954,7 @@ def main(game_date: str = None):
               f"  whose game isn't posted yet will be dropped as 'did not bat',\n"
               f"  which understates coverage. Scoring tomorrow is cleaner.\n")
 
+    step(2, "Committed predictions", f"cache/slate_{game_date}.csv")
     predictions = load_predictions(game_date)
     print(f"  {len(predictions)} predictions written before the games.")
     if "lineup_status" in predictions.columns:
@@ -973,8 +1002,11 @@ def main(game_date: str = None):
             print(f"  Both are scored below. The headline and the running "
                   f"total use the clean rows.")
 
+    step(3, "Hitter outcomes",
+         "Statcast refresh + official boxscore lines — the slow one")
     actuals = load_actuals(predictions, game_date)
 
+    step(4, "Hitter props", "model versus quoting the base rate")
     merged = predictions.merge(
         actuals.rename(columns={"batter": "player_id"}),
         on="player_id", how="inner", suffixes=("", "_actual"),
@@ -992,9 +1024,8 @@ def main(game_date: str = None):
         raise SystemExit("Too few matched hitters to score anything meaningful.")
 
     # ---- Binary props -------------------------------------------------
-    print("\n" + "=" * 72)
-    print("RESULTS -- model versus 'just quote the base rate'")
-    print("=" * 72)
+    print("\n  RESULTS -- model versus 'just quote the base rate'")
+    print("  " + "-" * 68)
 
     for missing in ("hrr", "total_bases", "hits"):
         if missing not in merged.columns:
@@ -1108,9 +1139,8 @@ def main(game_date: str = None):
         log = entry
     log.to_csv(log_path, index=False)
 
-    print("\n" + "=" * 72)
-    print(f"RUNNING TOTAL across {log['game_date'].nunique()} scored slate(s)")
-    print("=" * 72)
+    step(5, "Running total",
+         f"cache/scoring_log.csv — {log['game_date'].nunique()} scored slate(s)")
     # The running total is the clean rows only. A slate that was entirely
     # re-run after first pitch contributes nothing to it -- which is the
     # point, and is different from the slate being deleted: its full-slate
@@ -1180,11 +1210,38 @@ def main(game_date: str = None):
     # Graded on the CLEAN rows for the same reason everything else is: a
     # prediction made after the game started is not a forecast the marker
     # can be credited or blamed for.
+    # ---- slips, before the sub-scorers ------------------------------
+    #
+    # Folded in here rather than left as a separate command, because the
+    # two used to refresh the SAME ~270 players over the network twice --
+    # minutes of identical work for identical data. The actuals loaded at
+    # step 3 are handed straight over, so steps 6 to 10 cost nothing but
+    # the official pitching lines.
+    #
+    # It runs after the hitter props and before the sub-scorers because
+    # that is the order the numbers depend on each other: a slip is made
+    # of legs, and a leg is graded the same way a prop is.
+    try:
+        import score_slips
+        _hit = {}
+        _a = actuals.rename(columns={"batter": "player_id"})
+        for _, _r in _a.iterrows():
+            _hit[(int(_r["player_id"]), int(_r["game_pk"]))] = _r
+        score_slips.run(game_date, hitters=_hit, first_step=6,
+                        steps=SCORE_STEPS)
+    except Exception as exc:
+        # A slip failure must not cost the hitter numbers, which are the
+        # point of this script and are already computed by here.
+        print(f"\n  Slip grading skipped: {type(exc).__name__}: {exc}")
+
+    step(11, "Hot / cold marker", "does the flag predict the residual?")
     score_form_marker(basis, game_date)
 
     # Starters are graded from their own file and their own log --
     # fifteen rows against 250, so mixing them into the hitter totals
     # would let a noisy handful move a number built from hundreds.
+    step(12, "Starters and the game page",
+         "separate logs — fifteen rows against 250")
     score_pitchers(game_date)
 
     # The game page: win probabilities and totals against final scores
