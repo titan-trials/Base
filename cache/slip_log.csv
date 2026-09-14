@@ -1,0 +1,18 @@
+window,tier,n_legs,n_graded,slip_p,legs_hit,hit,n_games,solo,correlated,legs,game_date
+0,MEDIUM,3,3,0.0638213402530095,2.0,0.0,1,True,True,TJ Rumfield Walk + Kevin McGonigle Walk + Mickey Moniak TB 2.5,2026-09-13
+1,LOTTO,3,3,0.0152032663594592,0.0,0.0,10,False,False,Kyle Schwarber HR + Aaron Judge HR + Pete Crow-Armstrong HR,2026-09-13
+1,MEDIUM,3,3,0.0794659855795691,1.0,0.0,10,False,False,Dylan Cease Over 8.5 K + Kyle Schwarber TB 3.5 + Aaron Judge Walk,2026-09-13
+1,MIXED,4,4,0.0463263457082666,2.0,0.0,10,False,False,Dylan Cease Over 8.5 K + Michael Harris II H+R+RBI 0.5 + Aaron Judge Walk + Pete Crow-Armstrong HR,2026-09-13
+1,SAFE,3,3,0.3416160116223052,1.0,0.0,10,False,False,Cam Schlittler Under 7.5 K + Michael Harris II H+R+RBI 0.5 + Yordan Alvarez H+R+RBI 0.5,2026-09-13
+2,LOTTO,3,3,0.0003779580105698,0.0,0.0,1,True,True,Bobby Witt Jr. Hits 2.5 + Jac Caglianone Hits 2.5 + Michael Massey Hits 2.5,2026-09-13
+2,MEDIUM,3,3,0.0639474366044459,1.0,0.0,1,True,True,Willson Contreras Walk + Bobby Witt Jr. Hits 1.5 + Roman Anthony Walk,2026-09-13
+2,MIXED,4,4,0.0151785078353874,2.0,0.0,1,True,True,Payton Tolle Under 6.5 K + Bobby Witt Jr. H+R+RBI 0.5 + Willson Contreras Walk + Jac Caglianone Hits 2.5,2026-09-13
+2,SAFE,3,3,0.2990478933688112,1.0,0.0,1,True,True,Payton Tolle Under 6.5 K + Bobby Witt Jr. H+R+RBI 0.5 + Jac Caglianone H+R+RBI 0.5,2026-09-13
+3,LOTTO,3,3,0.0014117329073151,1.0,0.0,2,False,True,Gabriel Moreno Hits 2.5 + Randy Arozarena HR + Josh Jung Hits 2.5,2026-09-13
+3,MEDIUM,3,3,0.0719974597182107,1.0,0.0,2,False,True,Cal Raleigh HR + Lars Nootbaar Walk + J.P. Crawford Walk,2026-09-13
+3,MIXED,3,3,0.0318759944641847,1.0,0.0,2,False,True,Randy Arozarena H+R+RBI 0.5 + Lars Nootbaar Walk + Gabriel Moreno Hits 2.5,2026-09-13
+3,SAFE,3,3,0.384498979345276,3.0,1.0,2,False,True,Randy Arozarena H+R+RBI 0.5 + Corey Seager H+R+RBI 0.5 + Cal Raleigh H+R+RBI 0.5,2026-09-13
+4,LOTTO,3,3,0.0004150487487515,1.0,0.0,1,True,True,Fernando Tatis Jr. Hits 2.5 + Dustin Harris Hits 2.5 + Jackson Merrill Hits 2.5,2026-09-13
+4,MEDIUM,3,3,0.0476816686770339,2.0,0.0,1,True,True,Fernando Tatis Jr. Hits 1.5 + Bryce Eldridge Walk + Drew Gilbert Walk,2026-09-13
+4,MIXED,3,3,0.0225857855911795,1.0,0.0,1,True,True,Fernando Tatis Jr. H+R+RBI 0.5 + Bryce Eldridge Walk + Dustin Harris Hits 2.5,2026-09-13
+4,SAFE,3,3,0.3503404898657145,3.0,1.0,1,True,True,Fernando Tatis Jr. H+R+RBI 0.5 + Jackson Merrill H+R+RBI 0.5 + Manny Machado H+R+RBI 0.5,2026-09-13
