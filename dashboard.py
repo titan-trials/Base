@@ -1642,6 +1642,19 @@ with tab_pitch:
     html('<div style="font-size:15px;font-weight:640;color:var(--ink)">'
          'Starting pitchers</div><div style="color:var(--ink3);font-size:12.5px;'
          'margin-bottom:14px">Strikeout totals for tonight\'s starters.</div>')
+    # ---- the low-line warning, reserved here and written below --------
+    #
+    # It has to APPEAR at the top, next to the heading, and it can only be
+    # COMPUTED after pit_view exists, which is two hundred lines down. A
+    # flat script runs top to bottom, so the slot is claimed now and
+    # filled later; st.empty() holds the position.
+    #
+    # Left unfilled it renders nothing at all -- no gap, no empty box. That
+    # is the intended state on most nights, and it is the whole point of
+    # the thing being conditional: a warning that is always on the page
+    # stops being read within a week. This one is only there when tonight's
+    # slate actually has rows in the band the model runs hot in.
+    pit_warn_slot = st.empty()
     # The pitcher props live in their own file. A slate row is one hitter,
     # and a starter is not a hitter -- carrying nine pitcher columns on
     # every batter row to describe fourteen pitchers would be worse than a
@@ -1998,7 +2011,122 @@ with tab_pitch:
             _shown = (pit_view["Edge"].abs() >= 0.05) & (pit_view["Books"] >= MIN_BOOKS)
             _low = int((_shown & (pit_view["Edge"] > 0)
                         & (pit_view["Line"] <= 4.5)).sum())
-        _bias = (f'<br><b style="color:var(--ink2)">{_low} of tonight\'s '
+        # What the running record says tonight's OWN probabilities are
+        # worth. Computed from pitcher_row_log rather than asserted, and
+        # attached to the rows it applies to rather than left in Results
+        # where nobody reads it while looking at an edge.
+        _band = ""
+        _bpath = os.path.join(CACHE_DIR, "pitcher_row_log.csv")
+        if "Over" in pit_view and os.path.exists(_bpath):
+            try:
+                _bl = pd.read_csv(_bpath).dropna(subset=["k_dist",
+                                                         "strikeouts"])
+            except Exception:
+                _bl = pd.DataFrame()
+            if len(_bl) and "k_dist" in _bl.columns:
+                _pts = []
+                for _, _r in _bl.iterrows():
+                    _p = parse_pmf(_r["k_dist"])
+                    if _p is None:
+                        continue
+                    for _ln in (2.5, 3.5, 4.5, 5.5, 6.5, 7.5):
+                        _pts.append((prob_over(_p, _ln),
+                                     int(_r["strikeouts"] > _ln), _ln))
+                # The line is carried through because the warning above the
+                # table is specifically about LOW lines. Grading every
+                # stored distribution at every line is what makes that
+                # possible at all -- the slate was only ever priced at a
+                # couple of them, and 2.5 was never one.
+                _cd = pd.DataFrame(_pts, columns=["said", "hit", "line"])
+                # Tonight's rows, binned the same way, so the note counts
+                # real rows on this page rather than describing history.
+                _tn = pit_view["Over"].dropna()
+                _hot = _cd[(_cd.said >= .65) & (_cd.said < .8)]
+                _n_tonight = int(((_tn >= .65) & (_tn < .8)).sum())
+                if len(_hot) >= 40 and _n_tonight:
+                    _gap = float(_hot.hit.mean() - _hot.said.mean())
+                    _se = float(((_hot.said * (1 - _hot.said)).sum()) ** .5) \
+                        / len(_hot)
+                    if _gap < -2 * _se:
+                        _band = (
+                            f'<br><b style="color:var(--ink2)">'
+                            f'{_n_tonight} row(s) tonight sit between 65% '
+                            f'and 80%.</b> Over {len(_hot)} graded '
+                            f'probabilities in that band the model has said '
+                            f'{_hot.said.mean():.0%} and it has happened '
+                            f'{_hot.hit.mean():.0%} — about '
+                            f'{abs(_gap) * 100:.0f} points hot. An Edge '
+                            f'computed from an overstated probability is '
+                            f'overstated by the same amount, so treat a big '
+                            f'number on one of those rows as roughly '
+                            f'{abs(_gap) * 100:.0f} points smaller than it '
+                            f'reads. Results has the full curve.')
+
+                # ---- the low-line pill, written into the slot on top ----
+                #
+                # Same measurement as the footnote, a different slice of it,
+                # and deliberately a different place on the page. The
+                # footnote answers "what is this Edge actually worth" for
+                # the rows it sits under. This answers "should I be careful
+                # tonight" before he has scrolled anywhere.
+                #
+                # Restricted to lines at 3.5 and below AND to probabilities
+                # the model likes, because that pair is what produces a big
+                # printed OVER edge -- and it is the pair the model is
+                # furthest wrong about: the 2026-09-14 calibration curve has
+                # the model saying 73.8% and the thing happening 60.3% on
+                # 2.5 and 3.5.
+                #
+                # The CAUSE is still open, and this marker deliberately does
+                # not name one. lab_tto.py measured a real times-through-the-
+                # order effect (z = -8.84) and then priced its effect on this
+                # model at 0.2 points of probability -- the rate the model
+                # applies is learned on starts that already contain the
+                # decay, so it is absorbed rather than missing. Reporting the
+                # gap without explaining it is the only honest thing the page
+                # can do until the bad-and-short coupling has been tested.
+                #
+                # Counted from tonight's own rows and from the running
+                # record, never asserted. On a slate with no low-line rows,
+                # or before the log is deep enough to say anything, the slot
+                # stays empty and the page looks exactly as it did before.
+                _lo_hist = _cd[(_cd.line <= 3.5) & (_cd.said >= 0.55)]
+                _lo_n = 0
+                if "Line" in pit_view and "Over" in pit_view:
+                    _lo_n = int(((pit_view["Line"] <= 3.5)
+                                 & (pit_view["Over"] >= 0.55)).sum())
+                if len(_lo_hist) >= 40 and _lo_n:
+                    _lgap = float(_lo_hist.hit.mean() - _lo_hist.said.mean())
+                    # Poisson-binomial: the variance of a sum of independent
+                    # indicators is the sum of p(1-p), not n p̄(1-p̄). Each
+                    # graded probability is its own coin.
+                    _lse = (float(((_lo_hist.said * (1 - _lo_hist.said))
+                                   .sum()) ** .5) / len(_lo_hist))
+                    if _lgap < -2 * _lse:
+                        _tip = (f"Over {len(_lo_hist)} graded probabilities "
+                                f"at lines of 3.5 and below, the model has "
+                                f"said {_lo_hist.said.mean():.0%} and it has "
+                                f"happened {_lo_hist.hit.mean():.0%}. "
+                                f"{_lo_n} row(s) tonight sit there. "
+                                f"Results has the full curve.")
+                        pit_warn_slot.markdown(
+                            f'<div style="display:flex;justify-content:'
+                            f'flex-end;margin:-10px 0 12px">'
+                            f'<div title="{_tip}" style="display:inline-flex;'
+                            f'align-items:center;gap:8px;border:1px solid '
+                            f'var(--b1);background:var(--b1bg);'
+                            f'color:var(--b1ink);border-radius:999px;'
+                            f'padding:5px 13px;font-size:12px;'
+                            f'font-weight:600;cursor:help">'
+                            f'<span style="width:7px;height:7px;'
+                            f'border-radius:50%;background:var(--b1);'
+                            f'display:inline-block"></span>'
+                            f'{_lo_n} low-line OVER'
+                            f'{"s" if _lo_n != 1 else ""} tonight · '
+                            f'the model runs {abs(_lgap) * 100:.0f} pts hot '
+                            f'at 3.5 and below</div></div>',
+                            unsafe_allow_html=True)
+        _bias = (f'{_band}<br><b style="color:var(--ink2)">{_low} of tonight\'s '
                  f'coloured edges are OVERs at 4.5 or below.</b> That is the '
                  f'shape of a known bias, not a find: measured over 202 '
                  f'pitcher-nights the model moves 0.67 strikeouts for every '
@@ -3268,6 +3396,97 @@ with tab_res:
              f'<i>not yet separable from noise</i> is not a number to '
              f'correct for — it is a number to keep watching, and this row '
              f'is the thing that will eventually say so.</div>')
+
+    # ---- what a model probability is actually worth -------------------
+    #
+    # Nolan, on a starter the model liked at 73% over a 3.5 line while the
+    # market sat at 52%: "why is the market saying so bad for him?"
+    #
+    # Three explanations were tested and died. The shrinkage is not too
+    # strong -- K_PRIOR_BF = 250 is the measured optimum, and soft arms
+    # BEAT their own rate (4.29 actual against 3.83 unshrunk), so
+    # trusting his own low number would be worse. The distribution is not
+    # too narrow -- standardised residual variance 0.957 +/- 0.080. And
+    # "the model is projecting him above his own recent form" predicts
+    # nothing at all (r = -0.045, p = 0.66 over 101 starts).
+    #
+    # What IS real is plain over-confidence, and it is worst exactly where
+    # the biggest edges get displayed. Over 315 starts and six lines:
+    #
+    #     model said 73.8% on a 2.5 or 3.5 line  ->  happened 60.3%
+    #
+    # So this table is computed from the running log rather than
+    # hard-coded, because it is the number that decides whether a printed
+    # edge is real, and it should move as the record grows.
+    _cal = None
+    _cpath = os.path.join(CACHE_DIR, "pitcher_row_log.csv")
+    if os.path.exists(_cpath):
+        try:
+            _cal = pd.read_csv(_cpath)
+        except Exception:
+            _cal = None
+    if (_cal is not None and "k_dist" in _cal.columns
+            and "strikeouts" in _cal.columns):
+        _c = _cal.dropna(subset=["k_dist", "strikeouts"])
+        _pts = []
+        for _, _r in _c.iterrows():
+            _p = parse_pmf(_r["k_dist"])
+            if _p is None:
+                continue
+            for _ln in (2.5, 3.5, 4.5, 5.5, 6.5, 7.5):
+                _pts.append((_ln, prob_over(_p, _ln),
+                             int(_r["strikeouts"] > _ln)))
+        _cd = pd.DataFrame(_pts, columns=["line", "said", "hit"])
+        if len(_cd) >= 200:
+            html(f'<div style="font-size:15px;font-weight:640;'
+                 f'color:var(--ink);margin-top:30px">'
+                 f'What a strikeout probability is worth</div>'
+                 f'<div style="color:var(--ink3);font-size:12.5px;'
+                 f'margin-bottom:12px">When the model says X%, how often '
+                 f'has it happened? {int(_cd["said"].notna().sum()):,} '
+                 f'graded probabilities from '
+                 f'{_c["game_date"].nunique()} slates.</div>')
+            _cr = ""
+            for _lo, _hi in ((0, .2), (.2, .35), (.35, .5), (.5, .65),
+                             (.65, .8), (.8, 1.01)):
+                _g = _cd[(_cd.said >= _lo) & (_cd.said < _hi)]
+                if len(_g) < 25:
+                    continue
+                _said, _act = _g.said.mean(), _g.hit.mean()
+                _se = float(((_g.said * (1 - _g.said)).sum()) ** 0.5) / len(_g)
+                _off = abs(_act - _said) > 2 * _se
+                _cr += (f'<tr><td style="font-weight:560">'
+                        f'{_lo:.0%}–{_hi if _hi <= 1 else 1:.0%}</td>'
+                        f'<td style="text-align:right">{len(_g)}</td>'
+                        f'<td style="text-align:right">{_said:.1%}</td>'
+                        f'<td style="text-align:right">{_act:.1%}</td>'
+                        f'<td style="text-align:right;color:'
+                        f'{"var(--warn)" if _off else "var(--ink3)"}">'
+                        f'{_act - _said:+.1%}</td>'
+                        f'<td style="text-align:right;color:var(--ink3)">'
+                        f'±{_se:.1%}</td></tr>')
+            html(f'<table class="plain"><thead><tr><th>Model said</th>'
+                 f'<th style="text-align:right">n</th>'
+                 f'<th style="text-align:right">Mean said</th>'
+                 f'<th style="text-align:right">Happened</th>'
+                 f'<th style="text-align:right">Gap</th>'
+                 f'<th style="text-align:right">±</th></tr></thead>'
+                 f'<tbody>{_cr}</tbody></table>')
+            html('<div style="margin-top:10px;font-size:12px;'
+                 'color:var(--ink3);line-height:1.55">'
+                 'Every band reading negative means the model is '
+                 '<b style="color:var(--ink2)">over-confident</b>, not '
+                 'that it is wrong about who the good pitchers are — it '
+                 'ranks them well (r = 0.82 against the market). It is '
+                 'the SIZE of each probability that runs hot, and the '
+                 'worst band tends to be 65–80%, which is exactly where '
+                 'the Pitchers tab prints its biggest edges. An edge '
+                 'computed from an overstated probability is overstated '
+                 'by the same amount.<br>'
+                 'This is why the number is measured here rather than '
+                 'corrected in the model: the running record moves, and '
+                 'a constant baked in today would be fitted to one '
+                 'September.</div>')
 
     # ---- the velocity marker, grading itself -------------------------
     #

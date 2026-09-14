@@ -1917,6 +1917,33 @@ true, and it was the justification for the whole file.
   measurable AUC gain — likely because the two measure overlapping
   underlying plate-discipline skill.
 
+- **A lab is only as big as the files sitting next to it, and nothing
+  warns you.** On 2026-09-14 every lab in this project ran against
+  `cache/statcast_pitcher_*.csv` on whichever machine invoked it. The
+  working copy held 50 caches; this machine had 196. No error, no warning
+  — the measurements simply used a quarter of the evidence. `lab_log5.py`
+  is the demonstration: a −0.72% effect at z = −1.27 on 50 caches, and
+  +0.03% at z = −0.55 on all 196. The lean was noise, and at the larger
+  sample the smaller result would have shown at z = −3.2 had it been real.
+  The fix is `distill_caches.py`: the labs consume about 4 MB of the
+  1.25 GB, so that 4 MB is now written to `cache/distilled/` and every lab
+  reads it and PRINTS the row count. A silent loader is how this stayed
+  invisible. Each lab still applies its own `MIN_BF` after loading — the
+  distiller keeps everything down to 8 batters so one table can serve
+  several thresholds, and skipping that step silently moved
+  `lab_shrinkage` from 4,198 starts to 4,408.
+- **The opposing lineup is not where the error is, and that is now
+  measured rather than assumed.** Four distinct questions, often confused:
+  (1) does the model know who is batting — yes, `per_batter_k_probs`
+  walks the real lineup in order with handedness; (2) is there signal in
+  opponent IDENTITY beyond its hitters — no, `lab_opponent.py`, does not
+  persist; (3) times through the order — real in baseball (−3.46 points,
+  z = −8.84 over 23k matchups) but already absorbed, because `k_rate` is
+  total K over total BF across all three looks, so a correct look factor
+  must preserve the mean and then moves a printed probability by 0.2
+  points; (4) does log5 COMBINE them correctly — yes, +0.03% at z = −0.55
+  on 288k plate appearances, bounding any effect under ~0.05 K a start.
+
 ---
 
 ## Known Issues / Technical Debt
@@ -2040,7 +2067,69 @@ true, and it was the justification for the whole file.
   Two feature requests answered with a lab script instead of a feature
   (vs-opponent does not persist; recent-K-rate form is noise).
 
+### V12.1 ✅ (Sep 14, 2026) — five hypotheses died, one warning shipped
+  A measured over-confidence in the strikeout probabilities: on 2.5 and
+  3.5 lines the model has said 73.8% and it has happened 60.3%. Five
+  explanations were tested and all five failed — shrinkage strength
+  (`K_PRIOR_BF = 250` looked optimal; **see V12.2, this was measured on 50
+  of 196 caches and is WRONG**), distribution width (standardised residual variance 0.957 ±
+  0.080), projection-above-recent-form (r = −0.045, p = 0.657), times
+  through the order (real, already absorbed), and bad-and-short coupling
+  (r = −0.041 — the wrong SIGN; long outings carry LOWER rates).
+  So the symptom is reported and no cause is claimed: a red pill at the
+  top of the Pitchers tab, only on nights with low-line OVERs the model
+  likes, plus a live calibration curve in Results. `backfill_k_dist.py`
+  repaired both — they were rendering nothing, because `k_dist` entered
+  the row log that same day and the 318 existing rows had none; the
+  distributions were in `cache/pitchers_{date}.csv` all along and 315 of
+  318 joined back on `(game_date, pitcher_id)`.
+  New: `distill_caches.py` + `distilled.py`, `pull_caches.py`,
+  `lab_tto.py`, `lab_tto_who.py`, `lab_coupling.py`, `lab_log5.py`,
+  `lab_shrinkage.py`. `harness.py` gained `st.empty()`.
+
+### V12.2 ✅ (Sep 14, 2026) — the reruns, and three reversals
+  `distill_caches.py` cut 196 caches to 4.3 MB and every lab was re-run on
+  all of them. Three findings from earlier the same day reversed:
+  - **`K_PRIOR_BF = 250` is too strong.** See NEXT item 0. The claim that
+    "soft arms BEAT their own rate" was a 50-cache artifact: at 196 they
+    come in at 3.97 K against a shrunk projection of 4.11.
+  - **The per-pitcher order penalty DOES persist.** Split-half r = -0.025
+    (z = -0.16) on 42 pitchers became r = +0.2105 (z = +2.05) on 115, with
+    the spread itself at z = +3.53 and an implied true spread of 2.46
+    points. And arsenal depth predicts it, in the direction Nolan argued:
+    mix entropy r = +0.209, pitch types r = +0.190, fastball share
+    r = -0.128 — all three consistent, none individually decisive.
+  - **The penalty is multiplicative, not additive.** Held-out K rate vs
+    penalty r = -0.182, z = -2.84; power arms lose 4.89 points where soft
+    arms lose 2.99, and a "keep 0.842 of your rate" form fits eight times
+    better than a flat subtraction.
+  None of this changes the "already absorbed" conclusion, which is
+  structural: `k_rate` is total K over total BF across all three looks, so
+  any look factor — per-pitcher, multiplicative or otherwise — must
+  preserve the mean, and then it only redistributes within the start.
+  `lab_coupling.py` stayed dead and got more so: r = -0.0662 at z = -6.17,
+  still the wrong SIGN.
+
 ### NEXT — what the evidence points at, in order
+  0. **Lower `K_PRIOR_BF` from 250.** The one live model change the
+     evidence now supports, and it needs a design pass before it is made.
+     On the model's own trailing-12-month window shape, over 9,723 starts,
+     250 tilts hard between arm types and 150 does not:
+
+         prior      soft       mid     power
+           150   -0.049K   -0.081K   -0.019K
+           250   -0.204K   -0.083K   +0.146K   <- live
+
+     Soft arms are exactly the pitchers carrying 2.5 and 3.5 lines, and
+     0.204 K of over-projection there is worth ~3-4 points of probability
+     — the first located component of the -13.5 point low-line gap. RMSE
+     also prefers 150, though only by 0.04%, so bias balance is the real
+     argument. A residual ~-0.06 K over-projection sits on every prior
+     value and is NOT a shrinkage problem; it is still unexplained.
+  0b. **`lab_pitcher_form.py` has not been re-run** on the full set. The
+     velocity marker cleared at p = 0.001 on 50 caches and deserves
+     confirming at 4x. It is the one lab still reading raw caches rather
+     than `cache/distilled/`.
   1. **The information gap to the market** (r 0.46 vs 0.55). Not a
      calibration fix — the model is at 82% of its own optimal width and
      sits on the diagonal. It needs things it does not have: announced

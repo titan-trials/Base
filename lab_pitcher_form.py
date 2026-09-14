@@ -51,6 +51,23 @@ tonight than that rate implies?
 
 Everything is computed from strictly PRIOR starts. A form feature that
 peeks at tonight will find a beautiful effect and mean nothing.
+
+
+RUN THIS AGAINST THE FULL CACHE SET
+-----------------------------------
+The numbers in the header above were measured on 2026-09-14 against 50
+statcast caches. The machine that owns this project had 196. Nothing
+failed and nothing warned -- the lab simply used whatever files were
+beside it, which was a quarter of the evidence.
+
+lab_log5.py shows what that is worth: a -0.72% effect at z = -1.27 on 50
+caches, and +0.03% at z = -0.55 once all 196 were in. The lean was noise.
+
+So treat every figure here as provisional until it has been re-run. Run
+`python distill_caches.py` first and this file will read the distilled
+table instead of the raw caches -- same numbers, seconds instead of
+minutes, and the row count is printed so the sample is never a guess
+again.
 """
 import glob
 import os

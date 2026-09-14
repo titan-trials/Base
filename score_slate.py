@@ -298,7 +298,19 @@ def _log_pitcher_rows(basis: pd.DataFrame, game_date: str):
              # It is fed to nothing -- same contract the hitter marker
              # has -- so the only way it ever earns its way into the
              # model is by these columns sitting next to the outcome.
-             "velo_base", "velo_recent", "velo_drop", "velo_state"]
+             "velo_base", "velo_recent", "velo_drop", "velo_state",
+             # The whole strikeout distribution, ~200 bytes a row.
+             #
+             # Without it this log can only ever check the two lines that
+             # happened to be in K_LINES, and the calibration problem
+             # lives at the LOW lines: measured over 315 starts, when the
+             # model said 73.8% on a 2.5 or 3.5 line it happened 60.3% of
+             # the time. Those lines were never in the log, so the log
+             # could not have found it.
+             #
+             # Stored raw, so any line anyone thinks of later can be
+             # graded against history that has already been recorded.
+             "k_dist", "outs_dist"]
             + [f"prob_k_over_{line}" for line in K_LINES]
             + [f"prob_outs_over_{line}" for line in OUTS_LINES])
     rows = basis[[c for c in keep if c in basis.columns]].copy()

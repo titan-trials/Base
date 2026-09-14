@@ -1,0 +1,110 @@
+Warn on low-line strikeout edges; five hypotheses tested and rejected
+
+The strikeout probabilities are over-confident, worst where the Pitchers
+tab prints its biggest edges: on 2.5 and 3.5 lines the model has said
+73.8% and it has happened 60.3%, and every probability band reads
+negative. Five candidate explanations were tested against the caches and
+all five failed, so the symptom is now reported with no cause attached.
+
+What was tested and rejected
+  - Shrinkage too strong. lab_shrinkage.py sweeps K_PRIOR_BF over 4,198
+    starts; 250 is the measured minimum, and soft arms BEAT their own
+    rate (4.29 actual vs 3.83 unshrunk).
+  - Distribution too narrow. Standardised residual variance 0.957 +/-
+    0.080.
+  - Projection above recent form predicts a miss. r = -0.045, p = 0.657.
+  - Times through the order. Real in baseball: -3.46 points of K rate on
+    the third look, z = -8.84 over 23k same-hitter/same-game matchups.
+    Already absorbed by the model, because k_rate is total K over total
+    BF across all three looks, so a correct look factor must preserve the
+    mean and then moves a printed probability by 0.2 points. No
+    per-pitcher version either: split-half r = -0.025, and arsenal depth
+    predicts nothing.
+  - Bad-and-short coupling. r = -0.041, the wrong SIGN -- long outings
+    carry LOWER rates, not higher.
+
+Shipped
+  - dashboard.py: a red pill top-right on the Pitchers tab, shown only on
+    nights whose slate has low-line OVERs the model likes, counted from
+    the running record rather than asserted; plus a live calibration
+    curve in Results and a footnote on the rows the Edge sits on. None of
+    them names a cause.
+  - score_slate.py: _log_pitcher_rows keeps k_dist and outs_dist, so any
+    line can be graded retroactively. This is what made the problem
+    visible at all -- the gap lives at lines that were never in K_LINES.
+  - backfill_k_dist.py: the curve and the pill were rendering nothing,
+    because k_dist entered the row log the same day and the 318 existing
+    rows had none. The distributions were in cache/pitchers_{date}.csv
+    all along; 315 of 318 join back on (game_date, pitcher_id). Copies
+    only, never recomputes.
+  - harness.py: st.empty(), so something can appear at the top of a tab
+    but be computed from the table below it.
+
+The opposing lineup, closed
+lab_log5.py tests whether log5 combines a hitter and a pitcher correctly
+-- never previously checked. It does: +0.03% at z = -0.55 over 287,984
+plate appearances, bounding any effect under 0.05 K a start. With
+lab_opponent.py and lab_tto.py that closes all four opponent questions.
+The model's treatment of the opposing lineup is sound, and that is now
+measured rather than assumed.
+
+Sample-size discipline
+Every lab above first ran against 50 statcast caches because that is what
+sat beside it; this machine has 196. No error, no warning. lab_log5.py is
+the demonstration -- -0.72% at z = -1.27 on 50 caches, +0.03% at z =
+-0.55 on all 196, and at the larger sample the smaller result would have
+shown at z = -3.2 had it been real.
+
+  - distill_caches.py reduces 1.25 GB to the ~4 MB the labs consume
+    (starts, matchups, arsenal) and distilled.py loads it, PRINTING the
+    row count every time. A silent loader is how this stayed invisible.
+    Each lab still applies its own MIN_BF after loading; skipping that
+    moved lab_shrinkage from 4,198 starts to 4,408.
+  - Every affected lab now carries a banner marking its published figures
+    provisional until re-run on the full set.
+  - pull_caches.py adds caches ranked by how often a starter has appeared
+    on past slates, with --verify reporting raw and usable counts side by
+    side.
+
+Re-run lab_shrinkage.py first: K_PRIOR_BF = 250 is live in the model and
+was called a measured optimum on a quarter of the evidence.
+
+Tests: check.py 6/6, test_slips.py, test_relief_tier.py, test_workload.py
+32/32.
+
+---
+
+Addendum after re-running on all 196 caches
+
+distill_caches.py cut them to 4.3 MB and every lab was re-run on the full
+set. Three conclusions from the body of this message reverse.
+
+  - K_PRIOR_BF = 250 IS TOO STRONG. On the model's own trailing-12-month
+    window shape, 9,723 starts, negative meaning over-projection:
+
+        prior      soft       mid     power
+          150   -0.049K   -0.081K   -0.019K
+          250   -0.204K   -0.083K   +0.146K   <- live
+
+    A 0.35 K spread between arm types at 250; 0.03 K at 150. Soft arms are
+    exactly the pitchers carrying 2.5 and 3.5 lines, and 0.204 K there is
+    worth ~3 points of probability at a 3.5 line -- the first located
+    component of the -13.5 point low-line gap. Not changed here; a live
+    model constant gets a design pass first.
+  - "Soft arms BEAT their own rate" was a 50-cache artifact. At 196 they
+    come in at 3.97 K against a shrunk projection of 4.11. The answer
+    given on Brandon Young is withdrawn.
+  - The per-pitcher order penalty DOES persist: split-half r = -0.025
+    (z = -0.16) on 42 pitchers became +0.2105 (z = +2.05) on 115, spread
+    at z = +3.53. Arsenal depth predicts it -- mix entropy r = +0.209,
+    pitch types r = +0.190, fastball share r = -0.128, all consistent. And
+    the penalty is multiplicative, not additive (z = -2.84; keep 0.842 of
+    the rate, fitting 8x better than a flat subtraction).
+
+The "already absorbed" conclusion does NOT reverse -- it is structural.
+k_rate spans all three looks, so any look factor must preserve the mean
+and then only redistributes. Still 0.2 points of probability.
+
+lab_coupling.py stayed dead: r = -0.0662 at z = -6.17, wrong sign.
+
+lab_pitcher_form.py has not been re-run and is still reading raw caches.
