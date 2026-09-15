@@ -315,8 +315,16 @@ def _log_hitter_rows(basis: pd.DataFrame, game_date: str):
     """
     if basis is None or basis.empty:
         return
-    keep = ["player", "player_id", "team", "opponent", "lineup_slot",
-            "opposing_pitcher_id", "platoon_edge",
+    # `game_pk` and `name`, not just player_id and date. A doubleheader puts
+    # the SAME player on the SAME date twice -- 58 such rows on 2026-09-04,
+    # CLE vs DET -- with one prediction graded against two games. Without
+    # game_pk that is indistinguishable from a logger doubling its rows, and
+    # working out which it was took two round trips through the data. The
+    # slate calls the name column `name`; `player` does not exist and was
+    # silently dropped by the `c in basis.columns` filter below, which is
+    # how the first version shipped with no names at all.
+    keep = ["game_pk", "name", "player", "player_id", "team", "opponent",
+            "lineup_slot", "opposing_pitcher_id", "platoon_edge",
             # every prediction the slate carried...
             ] + sorted(c for c in basis.columns if c.startswith("prob_")) + [
             # ...and every outcome it can be graded against.

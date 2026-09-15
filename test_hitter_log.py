@@ -88,6 +88,22 @@ S._log_hitter_rows(thin, "2026-09-15")
 d = pd.read_csv(p)
 check("a slate missing columns still logs", (d.game_date == "2026-09-15").sum() == 31)
 
+print("\ndoubleheaders")
+# The same player on the same DATE in two GAMES is legitimate -- one
+# prediction, two outcomes -- and on 2026-09-04 there were 58 such rows.
+# Without game_pk it is indistinguishable from the log doubling itself,
+# which is exactly the confusion it caused the first time.
+dh = pd.concat([frame(n=5, seed=7).assign(game_pk=1),
+                frame(n=5, seed=7).assign(game_pk=2)], ignore_index=True)
+S._log_hitter_rows(dh, "2026-09-20")
+d = pd.read_csv(p)
+got = d[d.game_date == "2026-09-20"]
+check("both games of a doubleheader are kept", len(got) == 10, f"({len(got)})")
+check("game_pk distinguishes them",
+      "game_pk" in got.columns and got.game_pk.nunique() == 2)
+check("and the pair is unique on (game_pk, player_id)",
+      not got.duplicated(subset=["game_pk", "player_id"]).any())
+
 print()
 if FAILED:
     print("FAILURES: " + ", ".join(FAILED))
