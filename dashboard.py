@@ -3641,12 +3641,35 @@ with tab_res:
         except Exception:
             _hl = None
     if _hl is not None and len(_hl) >= 300:
-        _HB = [("prob_hr", ("got_hr", None), "HR"),
-               ("prob_hit", ("got_hit", None), "1+ hit"),
-               ("prob_walk", ("got_walk", None), "1+ walk"),
-               ("prob_hits_over_1.5", ("hits", 1.5), "Hits 1.5"),
-               ("prob_tb_over_1.5", ("total_bases", 1.5), "TB 1.5"),
-               ("prob_hrr_over_1.5", ("hrr", 1.5), "H+R+RBI 1.5")]
+        # DERIVED from the log's own columns rather than hand-listed, so a
+        # prop added to the slate appears here without anyone remembering
+        # to add it. The first version listed six by hand and left out
+        # H+R+RBI 0.5 -- the highest-volume prop on the board -- purely
+        # because nobody typed it.
+        #
+        # `prob_hit` and `prob_hits_over_0.5` are the same event reached
+        # two different ways. Both are shown on purpose: if they ever
+        # disagree, that is a bug worth seeing rather than a duplicate
+        # worth hiding.
+        _FAM = {"hits": ("Hits", "hits"), "tb": ("TB", "total_bases"),
+                "hrr": ("H+R+RBI", "hrr")}
+        _HB = []
+        for _c in ("prob_hr", "prob_hit", "prob_walk"):
+            if _c in _hl.columns:
+                _HB.append((_c, (_c.replace("prob_", "got_"), None),
+                            {"prob_hr": "HR", "prob_hit": "1+ hit",
+                             "prob_walk": "1+ walk"}[_c]))
+        for _fam, (_nice, _tcol) in _FAM.items():
+            _cols = sorted(
+                (c for c in _hl.columns
+                 if c.startswith(f"prob_{_fam}_over_")),
+                key=lambda c: float(c.rsplit("_", 1)[-1]))
+            for _c in _cols:
+                try:
+                    _ln = float(_c.rsplit("_", 1)[-1])
+                except ValueError:
+                    continue
+                _HB.append((_c, (_tcol, _ln), f"{_nice} {_ln}"))
         _hr_rows, _n_flag, _n_band, _leans = "", 0, 0, []
         for _col, (_tc, _line), _lab in _HB:
             if _col not in _hl.columns or _tc not in _hl.columns:
