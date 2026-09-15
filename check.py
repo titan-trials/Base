@@ -120,3 +120,49 @@ else:
     else:
         print(f"gitignore        ok    all {len(_reads)} cache file(s) the "
               f"dashboard reads are tracked")
+
+# ---- Streamlit refuses to nest expanders ------------------------------
+#
+# "Expanders may not be nested inside other expanders" is a RUNTIME error,
+# so it does not show up in a parse check and the harness does not enforce
+# it either -- the whole Results tab became expanders on 2026-09-15 with a
+# pre-existing "How to read this" expander sitting inside one of them, and
+# only an AST walk caught it before it reached the browser.
+import ast as _ast
+
+_dash = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                      "dashboard.py")
+
+
+def _expander_depth(node, depth=0, worst=None):
+    worst = worst or [0, None]
+    for child in _ast.iter_child_nodes(node):
+        _d = depth
+        if isinstance(child, _ast.With):
+            for _it in child.items:
+                _ce = _it.context_expr
+                if (isinstance(_ce, _ast.Call)
+                        and getattr(_ce.func, "attr", "") == "expander"):
+                    _d = depth + 1
+                    if _d > worst[0]:
+                        # MUTATE, do not rebind: the recursive calls below
+                        # share this list, and an assignment here would be
+                        # local to one frame. The first version rebound it
+                        # and reported "max depth 0" on a page with six
+                        # expanders -- a guard that always passes.
+                        worst[0] = _d
+                        worst[1] = (_ce.args[0].value
+                                    if _ce.args
+                                    and hasattr(_ce.args[0], "value") else "?")
+        _expander_depth(child, _d, worst)
+    return worst
+
+
+_depth, _label = _expander_depth(_ast.parse(open(_dash).read()))
+print()
+if _depth > 1:
+    print(f"expanders        FAIL  nested expander ({_label!r}) -- Streamlit "
+          f"raises at runtime")
+    print("                       use an HTML <details> block for the inner one")
+else:
+    print(f"expanders        ok    no nesting (max depth {_depth})")

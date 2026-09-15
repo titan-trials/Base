@@ -3093,249 +3093,257 @@ with tab_bet:
 
 
 with tab_res:
-    html('<div style="font-size:15px;font-weight:640;color:var(--ink);'
-         'margin-bottom:14px">How the model has done</div>')
-    log_path = os.path.join(CACHE_DIR, "scoring_log.csv")
-    if not os.path.exists(log_path):
-        html('<div class="sp-kpi">'
-             '<div><span class="v">—</span><span class="k">Slates scored</span></div>'
-             '<div><span class="v">—</span><span class="k">Hitters graded</span></div>'
-             '<div><span class="v">—</span><span class="k">Model said vs actually happened</span></div>'
-             '</div><div class="sp-empty">No slates scored yet.<br>'
-             '<span style="color:var(--ink3);font-size:12px">Fills in once games '
-             'have been played and graded.</span></div>')
-    else:
-        raw = pd.read_csv(log_path)
+    # Collapsed by default. Six sections of dense tables is a
+    # lot to scroll past when you came looking for one of them.
+    with st.expander("How the model has done", expanded=False):
+        log_path = os.path.join(CACHE_DIR, "scoring_log.csv")
+        if not os.path.exists(log_path):
+            html('<div class="sp-kpi">'
+                 '<div><span class="v">—</span><span class="k">Slates scored</span></div>'
+                 '<div><span class="v">—</span><span class="k">Hitters graded</span></div>'
+                 '<div><span class="v">—</span><span class="k">Model said vs actually happened</span></div>'
+                 '</div><div class="sp-empty">No slates scored yet.<br>'
+                 '<span style="color:var(--ink3);font-size:12px">Fills in once games '
+                 'have been played and graded.</span></div>')
+        else:
+            raw = pd.read_csv(log_path)
 
-        # Read the CLEAN columns -- hitters whose prediction was written
-        # before their own game started. Lineups get posted at different
-        # times, so a night usually involves re-running the predictor, and
-        # rows for games already underway are graded against outcomes the
-        # rolling rates may already contain. Those rows stay in the log and
-        # are still there to look at; they just do not set this number.
-        #
-        # Rows written before score_slate recorded the distinction have no
-        # clean_* columns. Fall back to their plain values rather than
-        # dropping the slate -- the distinction did not exist to record.
-        log = raw.copy()
-        for col in ("n", "base_rate", "mean_pred", "brier", "auc"):
-            clean_col = f"clean_{col}"
-            if clean_col in log.columns:
-                log[col] = log[clean_col].fillna(log[col])
-        log = log[log["n"].fillna(0) > 0]
-
-        # If nothing anywhere was written pre-game, show the full-slate
-        # numbers rather than an empty page -- but say plainly what they
-        # are. st.stop() would have been the obvious move here and is the
-        # wrong one: it halts the whole script, not just this tab.
-        full_graded = int(raw.groupby("game_date")["n"].max().sum())
-
-        showing_tainted = log.empty
-        if showing_tainted:
+            # Read the CLEAN columns -- hitters whose prediction was written
+            # before their own game started. Lineups get posted at different
+            # times, so a night usually involves re-running the predictor, and
+            # rows for games already underway are graded against outcomes the
+            # rolling rates may already contain. Those rows stay in the log and
+            # are still there to look at; they just do not set this number.
+            #
+            # Rows written before score_slate recorded the distinction have no
+            # clean_* columns. Fall back to their plain values rather than
+            # dropping the slate -- the distinction did not exist to record.
             log = raw.copy()
-            html('<div style="border:1px solid var(--warn);border-radius:9px;'
-                 'padding:11px 13px;margin-bottom:14px;font-size:12.5px;'
-                 'color:var(--ink2)"><b style="color:var(--warn)">'
-                 'Not out-of-sample.</b> No scored slate has predictions '
-                 'written before first pitch, so the numbers below are '
-                 'measuring hindsight, not forecasting. Run the predictor '
-                 'before games start.</div>')
+            for col in ("n", "base_rate", "mean_pred", "brier", "auc"):
+                clean_col = f"clean_{col}"
+                if clean_col in log.columns:
+                    log[col] = log[clean_col].fillna(log[col])
+            log = log[log["n"].fillna(0) > 0]
 
-        n_slates = log["game_date"].nunique()
+            # If nothing anywhere was written pre-game, show the full-slate
+            # numbers rather than an empty page -- but say plainly what they
+            # are. st.stop() would have been the obvious move here and is the
+            # wrong one: it halts the whole script, not just this tab.
+            full_graded = int(raw.groupby("game_date")["n"].max().sum())
 
-        # Every prop is graded against the SAME hitters, so summing `n`
-        # across the seven rows of a slate counts each hitter seven times.
-        # One slate of 270 would read "1,890 hitters graded", which is
-        # flattering and false. Take the per-slate figure, then add slates.
-        graded = int(log.groupby("game_date")["n"].max().sum())
+            showing_tainted = log.empty
+            if showing_tainted:
+                log = raw.copy()
+                html('<div style="border:1px solid var(--warn);border-radius:9px;'
+                     'padding:11px 13px;margin-bottom:14px;font-size:12.5px;'
+                     'color:var(--ink2)"><b style="color:var(--warn)">'
+                     'Not out-of-sample.</b> No scored slate has predictions '
+                     'written before first pitch, so the numbers below are '
+                     'measuring hindsight, not forecasting. Run the predictor '
+                     'before games start.</div>')
 
-        # Pool each prop across slates, weighting by how many hitters that
-        # slate contributed. Averaging the rates unweighted would let a
-        # rained-out four-game night count as much as a full slate.
-        def pooled(g):
-            w = g["n"].sum()
-            said = (g["mean_pred"] * g["n"]).sum() / w
-            did = (g["base_rate"] * g["n"]).sum() / w
-            brier = (g["brier"] * g["n"]).sum() / w
-            # Rebuild skill from the pooled numbers rather than averaging
-            # the per-slate skills: the reference variance is p(1-p) at the
-            # POOLED base rate, and an average of ratios is not the ratio
-            # of the averages.
-            ref = did * (1.0 - did)
-            skill = 1.0 - brier / ref if ref > 0 else float("nan")
-            # How many standard errors the miss is worth. A 2-point gap on
-            # 270 hitters is noise; the same gap on 5,000 is a bias.
-            se = (did * (1.0 - did) / w) ** 0.5 if w else float("nan")
-            sigma = (said - did) / se if se else float("nan")
-            # Ranking, pooled the same way. This is the OTHER half of being
-            # right and it was invisible on this page until now: a model
-            # that quotes the league rate to every hitter matches the slate
-            # total exactly and has an AUC of 0.50. Calibration alone
-            # cannot tell those two apart.
-            auc = ((g["auc"] * g["n"]).sum() / w
-                   if "auc" in g and g["auc"].notna().any() else float("nan"))
-            return pd.Series({"n": w, "said": said, "did": did,
-                              "auc": auc, "skill": skill, "sigma": sigma})
+            n_slates = log["game_date"].nunique()
 
-        # Column list is explicit: `groupby(...).apply()` over the whole
-        # frame warns (and in newer pandas will error) about operating on
-        # the grouping column itself.
-        by_prop = (log.groupby("label", sort=False)
-                      [["n", "mean_pred", "base_rate", "brier", "auc"]]
-                      .apply(pooled).reset_index())
+            # Every prop is graded against the SAME hitters, so summing `n`
+            # across the seven rows of a slate counts each hitter seven times.
+            # One slate of 270 would read "1,890 hitters graded", which is
+            # flattering and false. Take the per-slate figure, then add slates.
+            graded = int(log.groupby("game_date")["n"].max().sum())
 
-        # The headline is the edge, not the average probability: averaging
-        # "11% of hitters homer" against "61% get a hit" produces a number
-        # that describes nothing.
-        head_skill = float((by_prop["skill"] * by_prop["n"]).sum()
-                           / by_prop["n"].sum())
-        worst = float(by_prop["sigma"].abs().max())
+            # Pool each prop across slates, weighting by how many hitters that
+            # slate contributed. Averaging the rates unweighted would let a
+            # rained-out four-game night count as much as a full slate.
+            def pooled(g):
+                w = g["n"].sum()
+                said = (g["mean_pred"] * g["n"]).sum() / w
+                did = (g["base_rate"] * g["n"]).sum() / w
+                brier = (g["brier"] * g["n"]).sum() / w
+                # Rebuild skill from the pooled numbers rather than averaging
+                # the per-slate skills: the reference variance is p(1-p) at the
+                # POOLED base rate, and an average of ratios is not the ratio
+                # of the averages.
+                ref = did * (1.0 - did)
+                skill = 1.0 - brier / ref if ref > 0 else float("nan")
+                # How many standard errors the miss is worth. A 2-point gap on
+                # 270 hitters is noise; the same gap on 5,000 is a bias.
+                se = (did * (1.0 - did) / w) ** 0.5 if w else float("nan")
+                sigma = (said - did) / se if se else float("nan")
+                # Ranking, pooled the same way. This is the OTHER half of being
+                # right and it was invisible on this page until now: a model
+                # that quotes the league rate to every hitter matches the slate
+                # total exactly and has an AUC of 0.50. Calibration alone
+                # cannot tell those two apart.
+                auc = ((g["auc"] * g["n"]).sum() / w
+                       if "auc" in g and g["auc"].notna().any() else float("nan"))
+                return pd.Series({"n": w, "said": said, "did": did,
+                                  "auc": auc, "skill": skill, "sigma": sigma})
 
-        html(f'<div class="sp-kpi">'
-             f'<div><span class="v">{n_slates}</span>'
-             f'<span class="k">Slates scored</span></div>'
-             f'<div><span class="v">{graded:,}</span>'
-             f'<span class="k">'
-             f'{"Hitters graded" if graded >= full_graded else "Clean hitters graded"}'
-             f'</span></div>'
-             f'<div><span class="v">{head_skill * 100:+.2f}%</span>'
-             f'<span class="k">Edge over guessing the base rate</span></div>'
-             f'<div><span class="v">{worst:.1f}σ</span>'
-             f'<span class="k">Largest calibration miss</span></div></div>')
+            # Column list is explicit: `groupby(...).apply()` over the whole
+            # frame warns (and in newer pandas will error) about operating on
+            # the grouping column itself.
+            by_prop = (log.groupby("label", sort=False)
+                          [["n", "mean_pred", "base_rate", "brier", "auc"]]
+                          .apply(pooled).reset_index())
 
-        def skill_color(s):
-            if pd.isna(s):
-                return "var(--ink3)"
-            return "var(--b4)" if s > 0.005 else \
-                   "var(--b3)" if s > 0 else "var(--b1)"
+            # The headline is the edge, not the average probability: averaging
+            # "11% of hitters homer" against "61% get a hit" produces a number
+            # that describes nothing.
+            head_skill = float((by_prop["skill"] * by_prop["n"]).sum()
+                               / by_prop["n"].sum())
+            worst = float(by_prop["sigma"].abs().max())
 
-        rows = "".join(
-            f'<tr><td style="font-weight:560">{r.label}</td>'
-            f'<td style="color:var(--ink2)">{int(r.n):,}</td>'
-            f'<td>{pct(r.said)}</td>'
-            f'<td>{pct(r.did)}</td>'
-            f'<td style="color:{"var(--ink2)" if abs(r.sigma) < 2 else "var(--warn)"}">'
-            f'{r.sigma:+.1f}σ</td>'
-            # Left deliberately uncoloured above 0.50. Shading it would
-            # invite reading a gap between 0.57 and 0.62 that four slates
-            # cannot support. The one threshold that means anything is the
-            # coin flip, so that is the only one marked.
-            f'<td style="color:{"var(--b1ink)" if r.auc < 0.5 else "var(--ink2)"};'
-            f'font-variant-numeric:tabular-nums">'
-            f'{"—" if pd.isna(r.auc) else f"{r.auc:.3f}"}</td>'
-            f'<td style="color:{skill_color(r.skill)};font-weight:560">'
-            f'{r.skill * 100:+.2f}%</td></tr>'
-            for r in by_prop.itertuples())
-        html('<table class="plain"><thead><tr><th>Prop</th><th>Graded</th>'
-             '<th>Model said</th><th>Actually happened</th>'
-             '<th>Miss</th><th>Ranking</th><th>Edge</th></tr></thead><tbody>'
-             + rows + '</tbody></table>')
+            html(f'<div class="sp-kpi">'
+                 f'<div><span class="v">{n_slates}</span>'
+                 f'<span class="k">Slates scored</span></div>'
+                 f'<div><span class="v">{graded:,}</span>'
+                 f'<span class="k">'
+                 f'{"Hitters graded" if graded >= full_graded else "Clean hitters graded"}'
+                 f'</span></div>'
+                 f'<div><span class="v">{head_skill * 100:+.2f}%</span>'
+                 f'<span class="k">Edge over guessing the base rate</span></div>'
+                 f'<div><span class="v">{worst:.1f}σ</span>'
+                 f'<span class="k">Largest calibration miss</span></div></div>')
 
-        html('<div style="margin-top:14px;font-size:12px;color:var(--ink3);'
-             'line-height:1.55">'
-             '<b style="color:var(--ink2)">Edge</b> is how much of the '
-             'guesswork the model removes versus just quoting the league '
-             'rate for everyone. Positive is good; anything above about '
-             '+1% is real skill. '
-             '<b style="color:var(--ink2)">Miss</b> is the gap between what '
-             'the model expected and what happened, measured in standard '
-             'errors — under 2σ is the sample being small, over 2σ is the '
-             'model being wrong.</div>')
+            def skill_color(s):
+                if pd.isna(s):
+                    return "var(--ink3)"
+                return "var(--b4)" if s > 0.005 else \
+                       "var(--b3)" if s > 0 else "var(--b1)"
 
-        # ---- how to read the table above ------------------------------
-        #
-        # The question this answers -- "the model said 11%, and the guy
-        # either homered or he didn't, so how is that graded?" -- is the
-        # single most reasonable confusion this page produces, and it comes
-        # back every time you look at it after a gap. So the answer lives
-        # here rather than in a document somewhere else, and it is built
-        # from the LIVE numbers so the worked example never goes stale.
-        #
-        # Collapsed by default: the numbers are the point of the tab, and
-        # an open explainer would push them under the fold.
-        with st.expander("How to read this"):
-            # Prefer home runs for the example -- a rare event over a big
-            # pile is the clearest case. Fall back to whatever has the most
-            # rows if the HR prop is not in the log.
-            ex = by_prop[by_prop["label"] == "at least 1 home run"]
-            if ex.empty:
-                ex = by_prop.nlargest(1, "n")
-            ex = ex.iloc[0]
-            n_ex = int(ex["n"])
-            expected, actual = ex["said"] * n_ex, ex["did"] * n_ex
-
-            html(
-                f'<div style="font-size:13px;line-height:1.65;color:var(--ink2);'
-                f'max-width:760px">'
-
-                f'<p style="margin:0 0 12px"><b style="color:var(--ink)">'
-                f'A single prediction cannot be checked.</b> The model said '
-                f'one hitter 24% and another 4%. Each of them either homered '
-                f'or did not. Neither number was wrong. So the grading never '
-                f'looks at one prediction — it looks at a pile of them.</p>'
-
-                f'<p style="margin:0 0 6px"><b style="color:var(--ink)">'
-                f'Add the percentages up.</b> That is how many the model '
-                f'expected to see. For <i>{ex["label"]}</i>:</p>'
-                f'<div style="background:var(--card2);border:1px solid var(--line);'
-                f'border-radius:9px;padding:12px 14px;margin:0 0 12px;'
+            rows = "".join(
+                f'<tr><td style="font-weight:560">{r.label}</td>'
+                f'<td style="color:var(--ink2)">{int(r.n):,}</td>'
+                f'<td>{pct(r.said)}</td>'
+                f'<td>{pct(r.did)}</td>'
+                f'<td style="color:{"var(--ink2)" if abs(r.sigma) < 2 else "var(--warn)"}">'
+                f'{r.sigma:+.1f}σ</td>'
+                # Left deliberately uncoloured above 0.50. Shading it would
+                # invite reading a gap between 0.57 and 0.62 that four slates
+                # cannot support. The one threshold that means anything is the
+                # coin flip, so that is the only one marked.
+                f'<td style="color:{"var(--b1ink)" if r.auc < 0.5 else "var(--ink2)"};'
                 f'font-variant-numeric:tabular-nums">'
-                f'{n_ex:,} hitters averaging {pct(ex["said"])} '
-                f'&nbsp;→&nbsp; <b style="color:var(--ink)">'
-                f'{expected:.0f} expected</b><br>'
-                f'What actually happened &nbsp;→&nbsp; '
-                f'<b style="color:var(--ink)">{actual:.0f} of them</b></div>'
-                f'<p style="margin:0 0 14px">That is the whole '
-                f'<i>Model said</i> / <i>Actually happened</i> pair — those '
-                f'two counts, divided by {n_ex:,}. The model committed to '
-                f'{expected:.0f} across the slate and {actual:.0f} showed '
-                f'up.</p>'
+                f'{"—" if pd.isna(r.auc) else f"{r.auc:.3f}"}</td>'
+                f'<td style="color:{skill_color(r.skill)};font-weight:560">'
+                f'{r.skill * 100:+.2f}%</td></tr>'
+                for r in by_prop.itertuples())
+            html('<table class="plain"><thead><tr><th>Prop</th><th>Graded</th>'
+                 '<th>Model said</th><th>Actually happened</th>'
+                 '<th>Miss</th><th>Ranking</th><th>Edge</th></tr></thead><tbody>'
+                 + rows + '</tbody></table>')
 
-                f'<p style="margin:0 0 12px"><b style="color:var(--ink)">'
-                f'But matching the total is only half of being right.</b> '
-                f'Imagine a lazy model that quoted {pct(ex["said"])} to '
-                f'<i>every</i> hitter — the best power hitter in baseball '
-                f'and a backup catcher, identical. It would also expect '
-                f'{expected:.0f}. It would look perfect on that column. And '
-                f'it would be worthless.</p>'
+            html('<div style="margin-top:14px;font-size:12px;color:var(--ink3);'
+                 'line-height:1.55">'
+                 '<b style="color:var(--ink2)">Edge</b> is how much of the '
+                 'guesswork the model removes versus just quoting the league '
+                 'rate for everyone. Positive is good; anything above about '
+                 '+1% is real skill. '
+                 '<b style="color:var(--ink2)">Miss</b> is the gap between what '
+                 'the model expected and what happened, measured in standard '
+                 'errors — under 2σ is the sample being small, over 2σ is the '
+                 'model being wrong.</div>')
 
-                f'<p style="margin:0 0 12px">So the second question is '
-                f'whether the hitters it rated high actually did it more '
-                f'often than the ones it rated low. That is '
-                f'<b style="color:var(--ink)">Ranking</b>: pick one hitter '
-                f'who did it and one who did not, at random — it is how '
-                f'often the model had given the right one the bigger '
-                f'number. 0.50 is a coin flip, and the lazy model above '
-                f'scores exactly 0.50 however well it matches the total.</p>'
+            # ---- how to read the table above ------------------------------
+            #
+            # The question this answers -- "the model said 11%, and the guy
+            # either homered or he didn't, so how is that graded?" -- is the
+            # single most reasonable confusion this page produces, and it comes
+            # back every time you look at it after a gap. So the answer lives
+            # here rather than in a document somewhere else, and it is built
+            # from the LIVE numbers so the worked example never goes stale.
+            #
+            # Collapsed by default: the numbers are the point of the tab, and
+            # an open explainer would push them under the fold.
+            if True:   # rendered as a <details> block, NOT an st.expander:
+                # Streamlit refuses to nest one expander inside another, and
+                # the whole Results tab became expanders on 2026-09-15. A native
+                # <details> collapses the same way, nests anywhere, and costs
+                # nothing.
+                # Prefer home runs for the example -- a rare event over a big
+                # pile is the clearest case. Fall back to whatever has the most
+                # rows if the HR prop is not in the log.
+                ex = by_prop[by_prop["label"] == "at least 1 home run"]
+                if ex.empty:
+                    ex = by_prop.nlargest(1, "n")
+                ex = ex.iloc[0]
+                n_ex = int(ex["n"])
+                expected, actual = ex["said"] * n_ex, ex["did"] * n_ex
 
-                f'<p style="margin:0 0 12px"><b style="color:var(--ink)">'
-                f'Edge</b> is both halves in one number: how much of the '
-                f'guesswork the model removes against quoting the league '
-                f'rate to everybody. <b style="color:var(--ink)">Miss</b> '
-                f'asks whether the gap could just be luck — it is the gap '
-                f'divided by the random swing you would expect on this many '
-                f'hitters, so under 2σ means the sample is small, not that '
-                f'the model is off.</p>'
+                html(
+                    '<details style="margin:6px 0 4px">'
+                    '<summary style="cursor:pointer;color:var(--ink2);font-size:12.5px;font-weight:560">How to read this</summary>'
+                    f'<div style="font-size:13px;line-height:1.65;color:var(--ink2);'
+                    f'max-width:760px">'
 
-                f'<p style="margin:0;color:var(--ink3)">Both columns have to '
-                f'be right. A model can match every total and rank nothing, '
-                f'or rank perfectly while being systematically too high. '
-                f'Neither one alone is a working model.</p>'
-                f'</div>')
+                    f'<p style="margin:0 0 12px"><b style="color:var(--ink)">'
+                    f'A single prediction cannot be checked.</b> The model said '
+                    f'one hitter 24% and another 4%. Each of them either homered '
+                    f'or did not. Neither number was wrong. So the grading never '
+                    f'looks at one prediction — it looks at a pile of them.</p>'
 
-        if not showing_tainted and graded < full_graded:
-            html(f'<div style="margin-top:8px;font-size:12px;color:var(--ink3);'
-                 f'line-height:1.55">Counts only the {graded:,} hitters whose '
-                 f'prediction was written before their own game started. The '
-                 f'other {full_graded - graded:,} were predicted after first '
-                 f'pitch — usually a re-run to pick up late lineups — and are '
-                 f'kept in the log but left out of these numbers.</div>')
+                    f'<p style="margin:0 0 6px"><b style="color:var(--ink)">'
+                    f'Add the percentages up.</b> That is how many the model '
+                    f'expected to see. For <i>{ex["label"]}</i>:</p>'
+                    f'<div style="background:var(--card2);border:1px solid var(--line);'
+                    f'border-radius:9px;padding:12px 14px;margin:0 0 12px;'
+                    f'font-variant-numeric:tabular-nums">'
+                    f'{n_ex:,} hitters averaging {pct(ex["said"])} '
+                    f'&nbsp;→&nbsp; <b style="color:var(--ink)">'
+                    f'{expected:.0f} expected</b><br>'
+                    f'What actually happened &nbsp;→&nbsp; '
+                    f'<b style="color:var(--ink)">{actual:.0f} of them</b></div>'
+                    f'<p style="margin:0 0 14px">That is the whole '
+                    f'<i>Model said</i> / <i>Actually happened</i> pair — those '
+                    f'two counts, divided by {n_ex:,}. The model committed to '
+                    f'{expected:.0f} across the slate and {actual:.0f} showed '
+                    f'up.</p>'
 
-        if n_slates < 10:
-            html(f'<div style="margin-top:12px;font-size:12px;'
-                 f'color:var(--ink3)">Based on {n_slates} '
-                 f'slate{"" if n_slates == 1 else "s"}. Roughly ten are '
-                 f'needed before these numbers stop moving around.</div>')
+                    f'<p style="margin:0 0 12px"><b style="color:var(--ink)">'
+                    f'But matching the total is only half of being right.</b> '
+                    f'Imagine a lazy model that quoted {pct(ex["said"])} to '
+                    f'<i>every</i> hitter — the best power hitter in baseball '
+                    f'and a backup catcher, identical. It would also expect '
+                    f'{expected:.0f}. It would look perfect on that column. And '
+                    f'it would be worthless.</p>'
+
+                    f'<p style="margin:0 0 12px">So the second question is '
+                    f'whether the hitters it rated high actually did it more '
+                    f'often than the ones it rated low. That is '
+                    f'<b style="color:var(--ink)">Ranking</b>: pick one hitter '
+                    f'who did it and one who did not, at random — it is how '
+                    f'often the model had given the right one the bigger '
+                    f'number. 0.50 is a coin flip, and the lazy model above '
+                    f'scores exactly 0.50 however well it matches the total.</p>'
+
+                    f'<p style="margin:0 0 12px"><b style="color:var(--ink)">'
+                    f'Edge</b> is both halves in one number: how much of the '
+                    f'guesswork the model removes against quoting the league '
+                    f'rate to everybody. <b style="color:var(--ink)">Miss</b> '
+                    f'asks whether the gap could just be luck — it is the gap '
+                    f'divided by the random swing you would expect on this many '
+                    f'hitters, so under 2σ means the sample is small, not that '
+                    f'the model is off.</p>'
+
+                    f'<p style="margin:0;color:var(--ink3)">Both columns have to '
+                    f'be right. A model can match every total and rank nothing, '
+                    f'or rank perfectly while being systematically too high. '
+                    f'Neither one alone is a working model.</p>'
+                    f'</div>'
+                    '</details>')
+
+            if not showing_tainted and graded < full_graded:
+                html(f'<div style="margin-top:8px;font-size:12px;color:var(--ink3);'
+                     f'line-height:1.55">Counts only the {graded:,} hitters whose '
+                     f'prediction was written before their own game started. The '
+                     f'other {full_graded - graded:,} were predicted after first '
+                     f'pitch — usually a re-run to pick up late lineups — and are '
+                     f'kept in the log but left out of these numbers.</div>')
+
+            if n_slates < 10:
+                html(f'<div style="margin-top:12px;font-size:12px;'
+                     f'color:var(--ink3)">Based on {n_slates} '
+                     f'slate{"" if n_slates == 1 else "s"}. Roughly ten are '
+                     f'needed before these numbers stop moving around.</div>')
 
     # ---- starting pitchers -------------------------------------------
     #
@@ -3347,180 +3355,181 @@ with tab_res:
     # Separate table rather than more rows on the hitter one: the unit is
     # a STARTER, about fifteen a night against 250 hitters, so an `n` in
     # this table means something very different from an `n` above it.
-    prow = os.path.join(CACHE_DIR, "pitcher_scoring_log.csv")
-    plog = None
-    if os.path.exists(prow):
-        try:
-            plog = pd.read_csv(prow)
-        except Exception:
-            plog = None
+    # Collapsed by default. Six sections of dense tables is a
+    # lot to scroll past when you came looking for one of them.
+    with st.expander("Starting pitchers", expanded=False):
+        prow = os.path.join(CACHE_DIR, "pitcher_scoring_log.csv")
+        plog = None
+        if os.path.exists(prow):
+            try:
+                plog = pd.read_csv(prow)
+            except Exception:
+                plog = None
 
-    if plog is not None and not plog.empty and "brier_skill" in plog.columns:
-        html('<div style="font-size:15px;font-weight:640;color:var(--ink);'
-             'margin-top:30px">Starting pitchers</div>'
-             '<div style="color:var(--ink3);font-size:12.5px;'
-             'margin-bottom:14px">One row per starter graded, not per '
-             'hitter — so these counts are much smaller than the ones '
-             'above and move around more.</div>')
+        if plog is not None and not plog.empty and "brier_skill" in plog.columns:
+            html('<div style="color:var(--ink3);font-size:12.5px;'
+                 'margin-bottom:14px">One row per starter graded, not per '
+                 'hitter — so these counts are much smaller than the ones '
+                 'above and move around more.</div>')
 
-        # Rows written before the outs prop existed are all strikeouts.
-        if "prop" not in plog.columns:
-            plog["prop"] = "strikeouts"
-        plog["prop"] = plog["prop"].fillna("strikeouts")
+            # Rows written before the outs prop existed are all strikeouts.
+            if "prop" not in plog.columns:
+                plog["prop"] = "strikeouts"
+            plog["prop"] = plog["prop"].fillna("strikeouts")
 
-        # The per-batter rate the strikeout prop compounds was replaced on
-        # this date, and the old path scored -0.14 live against the new
-        # one's +0.09 backtest. Two different models must not be pooled,
-        # so the older rows are dropped from this table rather than
-        # averaged into it -- the terminal shows both splits.
-        K_PATH_CHANGED = "2026-09-05"
-        dates = pd.to_datetime(plog["game_date"], errors="coerce")
-        older = int((dates < pd.Timestamp(K_PATH_CHANGED)).sum())
-        plog = plog[dates >= pd.Timestamp(K_PATH_CHANGED)]
+            # The per-batter rate the strikeout prop compounds was replaced on
+            # this date, and the old path scored -0.14 live against the new
+            # one's +0.09 backtest. Two different models must not be pooled,
+            # so the older rows are dropped from this table rather than
+            # averaged into it -- the terminal shows both splits.
+            K_PATH_CHANGED = "2026-09-05"
+            dates = pd.to_datetime(plog["game_date"], errors="coerce")
+            older = int((dates < pd.Timestamp(K_PATH_CHANGED)).sum())
+            plog = plog[dates >= pd.Timestamp(K_PATH_CHANGED)]
 
-    if plog is not None and not plog.empty:
-        def _ppool(g):
-            w = g["n"].to_numpy(dtype=float)
-            did = float((g["base_rate"] * g["n"]).sum() / w.sum())
-            brier = float((g["brier"] * g["n"]).sum() / w.sum())
-            ref = did * (1.0 - did)
-            se = (did * (1.0 - did) / w.sum()) ** 0.5 if w.sum() else float("nan")
-            said = float((g["mean_pred"] * g["n"]).sum() / w.sum())
-            return pd.Series({
-                "n": int(w.sum()), "slates": g["game_date"].nunique(),
-                "said": said, "did": did,
-                "skill": 1.0 - brier / ref if ref > 0 else float("nan"),
-                "sigma": (said - did) / se if se else float("nan")})
+        if plog is not None and not plog.empty:
+            def _ppool(g):
+                w = g["n"].to_numpy(dtype=float)
+                did = float((g["base_rate"] * g["n"]).sum() / w.sum())
+                brier = float((g["brier"] * g["n"]).sum() / w.sum())
+                ref = did * (1.0 - did)
+                se = (did * (1.0 - did) / w.sum()) ** 0.5 if w.sum() else float("nan")
+                said = float((g["mean_pred"] * g["n"]).sum() / w.sum())
+                return pd.Series({
+                    "n": int(w.sum()), "slates": g["game_date"].nunique(),
+                    "said": said, "did": did,
+                    "skill": 1.0 - brier / ref if ref > 0 else float("nan"),
+                    "sigma": (said - did) / se if se else float("nan")})
 
-        by_line = (plog.groupby(["prop", "line"], sort=False)
-                   [["n", "base_rate", "brier", "mean_pred", "game_date"]]
-                   .apply(_ppool).reset_index()
-                   .sort_values(["prop", "line"]))
+            by_line = (plog.groupby(["prop", "line"], sort=False)
+                       [["n", "base_rate", "brier", "mean_pred", "game_date"]]
+                       .apply(_ppool).reset_index()
+                       .sort_values(["prop", "line"]))
 
-        starters = int(plog.groupby("game_date")["n"].max().sum())
-        n_pslates = plog["game_date"].nunique()
-        best = by_line["skill"].max()
-        html(f'<div class="sp-kpi">'
-             f'<div><span class="v">{n_pslates}</span>'
-             f'<span class="k">Slates scored</span></div>'
-             f'<div><span class="v">{starters:,}</span>'
-             f'<span class="k">Starters graded</span></div>'
-             f'<div><span class="v">{best * 100:+.1f}%</span>'
-             f'<span class="k">Best line</span></div></div>')
+            starters = int(plog.groupby("game_date")["n"].max().sum())
+            n_pslates = plog["game_date"].nunique()
+            best = by_line["skill"].max()
+            html(f'<div class="sp-kpi">'
+                 f'<div><span class="v">{n_pslates}</span>'
+                 f'<span class="k">Slates scored</span></div>'
+                 f'<div><span class="v">{starters:,}</span>'
+                 f'<span class="k">Starters graded</span></div>'
+                 f'<div><span class="v">{best * 100:+.1f}%</span>'
+                 f'<span class="k">Best line</span></div></div>')
 
-        LABEL = {"strikeouts": "Strikeouts over", "outs": "Outs over"}
-        rows = ""
-        for r in by_line.itertuples():
-            extra = ""
-            if r.prop == "outs":
-                extra = f' <span style="color:var(--ink3)">({r.line / 3:.1f} inn)</span>'
-            rows += (
-                f'<tr><td style="font-weight:560">'
-                f'{LABEL.get(r.prop, r.prop)} {r.line:g}{extra}</td>'
-                f'<td style="color:var(--ink2)">{int(r.n):,}</td>'
-                f'<td>{pct(r.said)}</td><td>{pct(r.did)}</td>'
-                f'<td style="color:{"var(--ink2)" if abs(r.sigma) < 2 else "var(--warn)"}">'
-                f'{r.sigma:+.1f}σ</td>'
-                f'<td style="color:{skill_color(r.skill)};font-weight:560">'
-                f'{r.skill * 100:+.2f}%</td></tr>')
-        html('<table class="plain"><thead><tr><th>Prop</th>'
-             '<th>Graded</th><th>Model said</th><th>Actually happened</th>'
-             '<th>Miss</th><th>Edge</th></tr></thead><tbody>'
-             + rows + '</tbody></table>')
+            LABEL = {"strikeouts": "Strikeouts over", "outs": "Outs over"}
+            rows = ""
+            for r in by_line.itertuples():
+                extra = ""
+                if r.prop == "outs":
+                    extra = f' <span style="color:var(--ink3)">({r.line / 3:.1f} inn)</span>'
+                rows += (
+                    f'<tr><td style="font-weight:560">'
+                    f'{LABEL.get(r.prop, r.prop)} {r.line:g}{extra}</td>'
+                    f'<td style="color:var(--ink2)">{int(r.n):,}</td>'
+                    f'<td>{pct(r.said)}</td><td>{pct(r.did)}</td>'
+                    f'<td style="color:{"var(--ink2)" if abs(r.sigma) < 2 else "var(--warn)"}">'
+                    f'{r.sigma:+.1f}σ</td>'
+                    f'<td style="color:{skill_color(r.skill)};font-weight:560">'
+                    f'{r.skill * 100:+.2f}%</td></tr>')
+            html('<table class="plain"><thead><tr><th>Prop</th>'
+                 '<th>Graded</th><th>Model said</th><th>Actually happened</th>'
+                 '<th>Miss</th><th>Edge</th></tr></thead><tbody>'
+                 + rows + '</tbody></table>')
 
-        # The level check. Both props are built on the same projection of
-        # how long a starter lasts, so if that runs long BOTH run long --
-        # and a probability table cannot show it, because a model can be
-        # biased on the count and still land near 50% on a line.
-        pairs = [("Batters faced", "pred_bf", "actual_bf"),
-                 ("Strikeouts", "pred_k", "actual_k"),
-                 ("Outs recorded", "pred_outs", "actual_outs")]
-        cells = ""
-        for label, pc, ac in pairs:
-            if pc not in plog.columns or ac not in plog.columns:
-                continue
-            sub = plog.dropna(subset=[pc, ac])
-            # Nine innings is 27 outs. Anything past 30 is a parsing
-            # failure, not a pitcher -- rows written before the innings
-            # double-conversion was fixed carry 3.3e14 here, and one of
-            # them would make this whole row meaningless.
-            if ac == "actual_outs":
-                sub = sub[sub[ac] <= 30]
-            if sub.empty:
-                continue
-            w = sub["n"].to_numpy(dtype=float)
-            pred = float((sub[pc] * sub["n"]).sum() / w.sum())
-            act = float((sub[ac] * sub["n"]).sum() / w.sum())
-            gap = pred - act
+            # The level check. Both props are built on the same projection of
+            # how long a starter lasts, so if that runs long BOTH run long --
+            # and a probability table cannot show it, because a model can be
+            # biased on the count and still land near 50% on a line.
+            pairs = [("Batters faced", "pred_bf", "actual_bf"),
+                     ("Strikeouts", "pred_k", "actual_k"),
+                     ("Outs recorded", "pred_outs", "actual_outs")]
+            cells = ""
+            for label, pc, ac in pairs:
+                if pc not in plog.columns or ac not in plog.columns:
+                    continue
+                sub = plog.dropna(subset=[pc, ac])
+                # Nine innings is 27 outs. Anything past 30 is a parsing
+                # failure, not a pitcher -- rows written before the innings
+                # double-conversion was fixed carry 3.3e14 here, and one of
+                # them would make this whole row meaningless.
+                if ac == "actual_outs":
+                    sub = sub[sub[ac] <= 30]
+                if sub.empty:
+                    continue
+                w = sub["n"].to_numpy(dtype=float)
+                pred = float((sub[pc] * sub["n"]).sum() / w.sum())
+                act = float((sub[ac] * sub["n"]).sum() / w.sum())
+                gap = pred - act
 
-            # How sure is that gap? Without this the row reads as a
-            # finding whatever it says, and the strikeout gap in
-            # September 2026 was -0.34 at t = -2.36 -- real enough to
-            # watch, nowhere near enough to correct for. A constant offset
-            # fitted to thirteen September dates would also be fitting
-            # expanded rosters and innings management, and would be wrong
-            # in April.
-            #
-            # The standard error is taken ACROSS SLATES, not across
-            # starts. Starts on one night share a weather system, an
-            # umpire crew and a league-wide pattern of bullpen use, so
-            # treating them as independent understates the error by
-            # roughly the square root of the starts per night.
-            per = (sub[pc] - sub[ac]).to_numpy(dtype=float)
-            se = float("nan")
-            if len(per) >= 3:
-                var = float(((w * (per - gap) ** 2).sum() / w.sum())
-                            * len(per) / max(len(per) - 1, 1))
-                se = (var / len(per)) ** 0.5
-            solid = pd.notna(se) and se > 0 and abs(gap) > 2 * se
-            colour = "var(--warn)" if solid and abs(gap) >= 0.75 else (
-                "var(--ink2)" if not solid else "var(--ink)")
-            tail = (f' <span style="color:var(--ink3)">±{se:.2f}</span>'
-                    if pd.notna(se) else "")
-            verdict = ("" if pd.isna(se) else
-                       ' <span style="color:var(--ink3);font-size:11px">'
-                       + ("real" if solid else "not yet separable from noise")
-                       + '</span>')
-            cells += (
-                f'<div style="display:flex;justify-content:space-between;'
-                f'gap:14px;padding:3px 0;font-size:12.5px">'
-                f'<span style="color:var(--ink3)">{label}</span>'
-                f'<span style="font-variant-numeric:tabular-nums">'
-                f'projected <b style="color:var(--ink)">{pred:.2f}</b> · '
-                f'actual <b style="color:var(--ink)">{act:.2f}</b> · '
-                f'<b style="color:{colour}">{gap:+.2f}</b>{tail}{verdict}'
-                f'</span></div>')
-        if cells:
-            html(f'<div style="margin-top:16px;border:1px solid var(--line);'
-                 f'border-radius:10px;padding:11px 14px;max-width:520px">'
-                 f'<div style="font-size:11px;color:var(--ink3);'
-                 f'letter-spacing:.06em;text-transform:uppercase;'
-                 f'margin-bottom:5px">Level check — per start</div>'
-                 f'{cells}</div>')
+                # How sure is that gap? Without this the row reads as a
+                # finding whatever it says, and the strikeout gap in
+                # September 2026 was -0.34 at t = -2.36 -- real enough to
+                # watch, nowhere near enough to correct for. A constant offset
+                # fitted to thirteen September dates would also be fitting
+                # expanded rosters and innings management, and would be wrong
+                # in April.
+                #
+                # The standard error is taken ACROSS SLATES, not across
+                # starts. Starts on one night share a weather system, an
+                # umpire crew and a league-wide pattern of bullpen use, so
+                # treating them as independent understates the error by
+                # roughly the square root of the starts per night.
+                per = (sub[pc] - sub[ac]).to_numpy(dtype=float)
+                se = float("nan")
+                if len(per) >= 3:
+                    var = float(((w * (per - gap) ** 2).sum() / w.sum())
+                                * len(per) / max(len(per) - 1, 1))
+                    se = (var / len(per)) ** 0.5
+                solid = pd.notna(se) and se > 0 and abs(gap) > 2 * se
+                colour = "var(--warn)" if solid and abs(gap) >= 0.75 else (
+                    "var(--ink2)" if not solid else "var(--ink)")
+                tail = (f' <span style="color:var(--ink3)">±{se:.2f}</span>'
+                        if pd.notna(se) else "")
+                verdict = ("" if pd.isna(se) else
+                           ' <span style="color:var(--ink3);font-size:11px">'
+                           + ("real" if solid else "not yet separable from noise")
+                           + '</span>')
+                cells += (
+                    f'<div style="display:flex;justify-content:space-between;'
+                    f'gap:14px;padding:3px 0;font-size:12.5px">'
+                    f'<span style="color:var(--ink3)">{label}</span>'
+                    f'<span style="font-variant-numeric:tabular-nums">'
+                    f'projected <b style="color:var(--ink)">{pred:.2f}</b> · '
+                    f'actual <b style="color:var(--ink)">{act:.2f}</b> · '
+                    f'<b style="color:{colour}">{gap:+.2f}</b>{tail}{verdict}'
+                    f'</span></div>')
+            if cells:
+                html(f'<div style="margin-top:16px;border:1px solid var(--line);'
+                     f'border-radius:10px;padding:11px 14px;max-width:520px">'
+                     f'<div style="font-size:11px;color:var(--ink3);'
+                     f'letter-spacing:.06em;text-transform:uppercase;'
+                     f'margin-bottom:5px">Level check — per start</div>'
+                     f'{cells}</div>')
 
-        note = ""
-        if older:
-            note = (f' The {older} row(s) from before {K_PATH_CHANGED} are '
-                    f'left out: the strikeout prop compounded a different, '
-                    f'untested rate until then, and pooling two models '
-                    f'describes neither.')
-        html(f'<div style="margin-top:12px;font-size:12px;color:var(--ink3);'
-             f'line-height:1.55">Fifteen starters a night is a tenth of the '
-             f'hitter sample, so a single slate here is almost pure noise '
-             f'and even {n_pslates} is early.{note}<br>'
-             f'<b style="color:var(--ink2)">Level check</b> is the half a '
-             f'probability table cannot show: a model can sit near 50% on '
-             f'every line and still be projecting starters a full inning '
-             f'too deep. Both props are built on the same estimate of how '
-             f'long a starter lasts, so when that drifts they drift '
-             f'together.<br>'
-             f'The <b style="color:var(--ink2)">±</b> is measured across '
-             f'slates rather than across starts, because fifteen starters '
-             f'on one night share a league-wide pattern of bullpen use and '
-             f'are not fifteen independent draws. A gap marked '
-             f'<i>not yet separable from noise</i> is not a number to '
-             f'correct for — it is a number to keep watching, and this row '
-             f'is the thing that will eventually say so.</div>')
+            note = ""
+            if older:
+                note = (f' The {older} row(s) from before {K_PATH_CHANGED} are '
+                        f'left out: the strikeout prop compounded a different, '
+                        f'untested rate until then, and pooling two models '
+                        f'describes neither.')
+            html(f'<div style="margin-top:12px;font-size:12px;color:var(--ink3);'
+                 f'line-height:1.55">Fifteen starters a night is a tenth of the '
+                 f'hitter sample, so a single slate here is almost pure noise '
+                 f'and even {n_pslates} is early.{note}<br>'
+                 f'<b style="color:var(--ink2)">Level check</b> is the half a '
+                 f'probability table cannot show: a model can sit near 50% on '
+                 f'every line and still be projecting starters a full inning '
+                 f'too deep. Both props are built on the same estimate of how '
+                 f'long a starter lasts, so when that drifts they drift '
+                 f'together.<br>'
+                 f'The <b style="color:var(--ink2)">±</b> is measured across '
+                 f'slates rather than across starts, because fifteen starters '
+                 f'on one night share a league-wide pattern of bullpen use and '
+                 f'are not fifteen independent draws. A gap marked '
+                 f'<i>not yet separable from noise</i> is not a number to '
+                 f'correct for — it is a number to keep watching, and this row '
+                 f'is the thing that will eventually say so.</div>')
 
     # ---- what a model probability is actually worth -------------------
     #
@@ -3543,75 +3552,75 @@ with tab_res:
     # So this table is computed from the running log rather than
     # hard-coded, because it is the number that decides whether a printed
     # edge is real, and it should move as the record grows.
-    _cal = None
-    _cpath = os.path.join(CACHE_DIR, "pitcher_row_log.csv")
-    if os.path.exists(_cpath):
-        try:
-            _cal = pd.read_csv(_cpath)
-        except Exception:
-            _cal = None
-    if (_cal is not None and "k_dist" in _cal.columns
-            and "strikeouts" in _cal.columns):
-        _c = _cal.dropna(subset=["k_dist", "strikeouts"])
-        _pts = []
-        for _, _r in _c.iterrows():
-            _p = parse_pmf(_r["k_dist"])
-            if _p is None:
-                continue
-            for _ln in (2.5, 3.5, 4.5, 5.5, 6.5, 7.5):
-                _pts.append((_ln, prob_over(_p, _ln),
-                             int(_r["strikeouts"] > _ln)))
-        _cd = pd.DataFrame(_pts, columns=["line", "said", "hit"])
-        if len(_cd) >= 200:
-            html(f'<div style="font-size:15px;font-weight:640;'
-                 f'color:var(--ink);margin-top:30px">'
-                 f'What a strikeout probability is worth</div>'
-                 f'<div style="color:var(--ink3);font-size:12.5px;'
-                 f'margin-bottom:12px">When the model says X%, how often '
-                 f'has it happened? {int(_cd["said"].notna().sum()):,} '
-                 f'graded probabilities from '
-                 f'{_c["game_date"].nunique()} slates.</div>')
-            _cr = ""
-            for _lo, _hi in ((0, .2), (.2, .35), (.35, .5), (.5, .65),
-                             (.65, .8), (.8, 1.01)):
-                _g = _cd[(_cd.said >= _lo) & (_cd.said < _hi)]
-                if len(_g) < 25:
+    # Collapsed by default. Six sections of dense tables is a
+    # lot to scroll past when you came looking for one of them.
+    with st.expander("What a strikeout probability is worth", expanded=False):
+        _cal = None
+        _cpath = os.path.join(CACHE_DIR, "pitcher_row_log.csv")
+        if os.path.exists(_cpath):
+            try:
+                _cal = pd.read_csv(_cpath)
+            except Exception:
+                _cal = None
+        if (_cal is not None and "k_dist" in _cal.columns
+                and "strikeouts" in _cal.columns):
+            _c = _cal.dropna(subset=["k_dist", "strikeouts"])
+            _pts = []
+            for _, _r in _c.iterrows():
+                _p = parse_pmf(_r["k_dist"])
+                if _p is None:
                     continue
-                _said, _act = _g.said.mean(), _g.hit.mean()
-                _se = float(((_g.said * (1 - _g.said)).sum()) ** 0.5) / len(_g)
-                _off = abs(_act - _said) > 2 * _se
-                _cr += (f'<tr><td style="font-weight:560">'
-                        f'{_lo:.0%}–{_hi if _hi <= 1 else 1:.0%}</td>'
-                        f'<td style="text-align:right">{len(_g)}</td>'
-                        f'<td style="text-align:right">{_said:.1%}</td>'
-                        f'<td style="text-align:right">{_act:.1%}</td>'
-                        f'<td style="text-align:right;color:'
-                        f'{"var(--warn)" if _off else "var(--ink3)"}">'
-                        f'{_act - _said:+.1%}</td>'
-                        f'<td style="text-align:right;color:var(--ink3)">'
-                        f'±{_se:.1%}</td></tr>')
-            html(f'<table class="plain"><thead><tr><th>Model said</th>'
-                 f'<th style="text-align:right">n</th>'
-                 f'<th style="text-align:right">Mean said</th>'
-                 f'<th style="text-align:right">Happened</th>'
-                 f'<th style="text-align:right">Gap</th>'
-                 f'<th style="text-align:right">±</th></tr></thead>'
-                 f'<tbody>{_cr}</tbody></table>')
-            html('<div style="margin-top:10px;font-size:12px;'
-                 'color:var(--ink3);line-height:1.55">'
-                 'Every band reading negative means the model is '
-                 '<b style="color:var(--ink2)">over-confident</b>, not '
-                 'that it is wrong about who the good pitchers are — it '
-                 'ranks them well (r = 0.82 against the market). It is '
-                 'the SIZE of each probability that runs hot, and the '
-                 'worst band tends to be 65–80%, which is exactly where '
-                 'the Pitchers tab prints its biggest edges. An edge '
-                 'computed from an overstated probability is overstated '
-                 'by the same amount.<br>'
-                 'This is why the number is measured here rather than '
-                 'corrected in the model: the running record moves, and '
-                 'a constant baked in today would be fitted to one '
-                 'September.</div>')
+                for _ln in (2.5, 3.5, 4.5, 5.5, 6.5, 7.5):
+                    _pts.append((_ln, prob_over(_p, _ln),
+                                 int(_r["strikeouts"] > _ln)))
+            _cd = pd.DataFrame(_pts, columns=["line", "said", "hit"])
+            if len(_cd) >= 200:
+                html(f'<div style="color:var(--ink3);font-size:12.5px;'
+                     f'margin-bottom:12px">When the model says X%, how often '
+                     f'has it happened? {int(_cd["said"].notna().sum()):,} '
+                     f'graded probabilities from '
+                     f'{_c["game_date"].nunique()} slates.</div>')
+                _cr = ""
+                for _lo, _hi in ((0, .2), (.2, .35), (.35, .5), (.5, .65),
+                                 (.65, .8), (.8, 1.01)):
+                    _g = _cd[(_cd.said >= _lo) & (_cd.said < _hi)]
+                    if len(_g) < 25:
+                        continue
+                    _said, _act = _g.said.mean(), _g.hit.mean()
+                    _se = float(((_g.said * (1 - _g.said)).sum()) ** 0.5) / len(_g)
+                    _off = abs(_act - _said) > 2 * _se
+                    _cr += (f'<tr><td style="font-weight:560">'
+                            f'{_lo:.0%}–{_hi if _hi <= 1 else 1:.0%}</td>'
+                            f'<td style="text-align:right">{len(_g)}</td>'
+                            f'<td style="text-align:right">{_said:.1%}</td>'
+                            f'<td style="text-align:right">{_act:.1%}</td>'
+                            f'<td style="text-align:right;color:'
+                            f'{"var(--warn)" if _off else "var(--ink3)"}">'
+                            f'{_act - _said:+.1%}</td>'
+                            f'<td style="text-align:right;color:var(--ink3)">'
+                            f'±{_se:.1%}</td></tr>')
+                html(f'<table class="plain"><thead><tr><th>Model said</th>'
+                     f'<th style="text-align:right">n</th>'
+                     f'<th style="text-align:right">Mean said</th>'
+                     f'<th style="text-align:right">Happened</th>'
+                     f'<th style="text-align:right">Gap</th>'
+                     f'<th style="text-align:right">±</th></tr></thead>'
+                     f'<tbody>{_cr}</tbody></table>')
+                html('<div style="margin-top:10px;font-size:12px;'
+                     'color:var(--ink3);line-height:1.55">'
+                     'Every band reading negative means the model is '
+                     '<b style="color:var(--ink2)">over-confident</b>, not '
+                     'that it is wrong about who the good pitchers are — it '
+                     'ranks them well (r = 0.82 against the market). It is '
+                     'the SIZE of each probability that runs hot, and the '
+                     'worst band tends to be 65–80%, which is exactly where '
+                     'the Pitchers tab prints its biggest edges. An edge '
+                     'computed from an overstated probability is overstated '
+                     'by the same amount.<br>'
+                     'This is why the number is measured here rather than '
+                     'corrected in the model: the running record moves, and '
+                     'a constant baked in today would be fitted to one '
+                     'September.</div>')
 
     # ---- the same question for the hitters ---------------------------
     #
@@ -3633,133 +3642,133 @@ with tab_res:
     #
     # A band needs 40 rows to appear. Fewer than that and the error bar is
     # wider than anything it could reveal.
-    _hl = None
-    _hpath = os.path.join(CACHE_DIR, "hitter_row_log.csv")
-    if os.path.exists(_hpath):
-        try:
-            _hl = pd.read_csv(_hpath)
-        except Exception:
-            _hl = None
-    if _hl is not None and len(_hl) >= 300:
-        # DERIVED from the log's own columns rather than hand-listed, so a
-        # prop added to the slate appears here without anyone remembering
-        # to add it. The first version listed six by hand and left out
-        # H+R+RBI 0.5 -- the highest-volume prop on the board -- purely
-        # because nobody typed it.
-        #
-        # `prob_hit` and `prob_hits_over_0.5` are the same event reached
-        # two different ways. Both are shown on purpose: if they ever
-        # disagree, that is a bug worth seeing rather than a duplicate
-        # worth hiding.
-        _FAM = {"hits": ("Hits", "hits"), "tb": ("TB", "total_bases"),
-                "hrr": ("H+R+RBI", "hrr")}
-        _HB = []
-        for _c in ("prob_hr", "prob_hit", "prob_walk"):
-            if _c in _hl.columns:
-                _HB.append((_c, (_c.replace("prob_", "got_"), None),
-                            {"prob_hr": "HR", "prob_hit": "1+ hit",
-                             "prob_walk": "1+ walk"}[_c]))
-        for _fam, (_nice, _tcol) in _FAM.items():
-            _cols = sorted(
-                (c for c in _hl.columns
-                 if c.startswith(f"prob_{_fam}_over_")),
-                key=lambda c: float(c.rsplit("_", 1)[-1]))
-            for _c in _cols:
-                try:
-                    _ln = float(_c.rsplit("_", 1)[-1])
-                except ValueError:
+    # Collapsed by default. Six sections of dense tables is a
+    # lot to scroll past when you came looking for one of them.
+    with st.expander("What a hitter probability is worth", expanded=False):
+        _hl = None
+        _hpath = os.path.join(CACHE_DIR, "hitter_row_log.csv")
+        if os.path.exists(_hpath):
+            try:
+                _hl = pd.read_csv(_hpath)
+            except Exception:
+                _hl = None
+        if _hl is not None and len(_hl) >= 300:
+            # DERIVED from the log's own columns rather than hand-listed, so a
+            # prop added to the slate appears here without anyone remembering
+            # to add it. The first version listed six by hand and left out
+            # H+R+RBI 0.5 -- the highest-volume prop on the board -- purely
+            # because nobody typed it.
+            #
+            # `prob_hit` and `prob_hits_over_0.5` are the same event reached
+            # two different ways. Both are shown on purpose: if they ever
+            # disagree, that is a bug worth seeing rather than a duplicate
+            # worth hiding.
+            _FAM = {"hits": ("Hits", "hits"), "tb": ("TB", "total_bases"),
+                    "hrr": ("H+R+RBI", "hrr")}
+            _HB = []
+            for _c in ("prob_hr", "prob_hit", "prob_walk"):
+                if _c in _hl.columns:
+                    _HB.append((_c, (_c.replace("prob_", "got_"), None),
+                                {"prob_hr": "HR", "prob_hit": "1+ hit",
+                                 "prob_walk": "1+ walk"}[_c]))
+            for _fam, (_nice, _tcol) in _FAM.items():
+                _cols = sorted(
+                    (c for c in _hl.columns
+                     if c.startswith(f"prob_{_fam}_over_")),
+                    key=lambda c: float(c.rsplit("_", 1)[-1]))
+                for _c in _cols:
+                    try:
+                        _ln = float(_c.rsplit("_", 1)[-1])
+                    except ValueError:
+                        continue
+                    _HB.append((_c, (_tcol, _ln), f"{_nice} {_ln}"))
+            _hr_rows, _n_flag, _n_band, _leans = "", 0, 0, []
+            for _col, (_tc, _line), _lab in _HB:
+                if _col not in _hl.columns or _tc not in _hl.columns:
                     continue
-                _HB.append((_c, (_tcol, _ln), f"{_nice} {_ln}"))
-        _hr_rows, _n_flag, _n_band, _leans = "", 0, 0, []
-        for _col, (_tc, _line), _lab in _HB:
-            if _col not in _hl.columns or _tc not in _hl.columns:
-                continue
-            _d = _hl.dropna(subset=[_col, _tc]).copy()
-            _d["_y"] = ((_d[_tc] > _line).astype(float) if _line is not None
-                        else pd.to_numeric(_d[_tc], errors="coerce"))
-            _d = _d.dropna(subset=["_y"])
-            _first, _signs = True, []
-            for _i in range(10):
-                _lo = _i / 10.0
-                _hi = 1.01 if _i == 9 else (_i + 1) / 10.0
-                _g = _d[(_d[_col] >= _lo) & (_d[_col] < _hi)]
-                if len(_g) < 40:
-                    continue
-                _said, _act = float(_g[_col].mean()), float(_g["_y"].mean())
-                # Poisson-binomial: each row is its own coin, so the
-                # variance is the sum of p(1-p), not n p_bar(1-p_bar).
-                _se = (float(((_g[_col] * (1 - _g[_col])).sum())) ** 0.5
-                       / len(_g))
-                _off = abs(_act - _said) > 2 * _se
-                _n_band += 1
-                _n_flag += int(_off)
-                # Only bands with real weight count toward the lean below.
-                # A 95-row band has an error bar of five points and its
-                # SIGN is close to a coin flip, so letting one in flips a
-                # genuine four-band lean to "mixed" -- which is exactly
-                # what a 102-row +4.1% cell did to `1+ walk` on the first
-                # pass, hiding the clearest pattern in the table.
-                if len(_g) >= 200:
-                    _signs.append(_act - _said)
-                _hr_rows += (
-                    f'<tr><td style="font-weight:560">'
-                    f'{_lab if _first else ""}</td>'
-                    f'<td style="color:var(--ink3)">'
-                    f'{_lo:.0%}–{min(_hi, 1):.0%}</td>'
-                    f'<td style="text-align:right">{len(_g):,}</td>'
-                    f'<td style="text-align:right">{_said:.1%}</td>'
-                    f'<td style="text-align:right">{_act:.1%}</td>'
-                    f'<td style="text-align:right;color:'
-                    f'{"var(--warn)" if _off else "var(--ink3)"}">'
-                    f'{_act - _said:+.1%}</td>'
-                    f'<td style="text-align:right;color:var(--ink3)">'
-                    f'±{_se:.1%}</td></tr>')
-                _first = False
-            # Three or more WEIGHTY bands of one prop all leaning the same
-            # way is worth more than any single amber cell: an individual
-            # band clears two sigma on noise about one time in twenty, but
-            # a consistent sign across bands is the shape of a real bias.
-            if len(_signs) >= 3 and (all(x < 0 for x in _signs)
-                                     or all(x > 0 for x in _signs)):
-                _leans.append((_lab, len(_signs),
-                               "high" if _signs[0] < 0 else "low"))
-        if _hr_rows:
-            html(f'<div style="font-size:15px;font-weight:640;'
-                 f'color:var(--ink);margin-top:30px">'
-                 f'What a hitter probability is worth</div>'
-                 f'<div style="color:var(--ink3);font-size:12.5px;'
-                 f'margin-bottom:12px">{len(_hl):,} graded hitter-games '
-                 f'from {_hl["game_date"].nunique()} slates, in deciles. '
-                 f'A band needs 40 rows to appear, so each prop shows only '
-                 f'the range it actually occupies.</div>')
-            html(f'<table class="plain"><thead><tr><th>Prop</th>'
-                 f'<th>Model said</th>'
-                 f'<th style="text-align:right">n</th>'
-                 f'<th style="text-align:right">Mean said</th>'
-                 f'<th style="text-align:right">Happened</th>'
-                 f'<th style="text-align:right">Gap</th>'
-                 f'<th style="text-align:right">±</th></tr></thead>'
-                 f'<tbody>{_hr_rows}</tbody></table>')
-            _lean_txt = ""
-            if _leans:
-                _lean_txt = (
-                    "<br><b style=\"color:var(--ink2)\">"
-                    + "; ".join(f"{_l} reads {_d} in all {_n} of its bands"
-                                for _l, _n, _d in _leans)
-                    + ".</b> That matters more than any single amber cell: "
-                      "one band clears two sigma on noise about one time in "
-                      "twenty, but a consistent sign across bands is the "
-                      "shape of a real bias.")
-            html(f'<div style="margin-top:10px;font-size:12px;'
-                 f'color:var(--ink3);line-height:1.55">'
-                 f'{_n_flag} of {_n_band} bands clear two standard errors; '
-                 f'about {_n_band * 0.05:.1f} would on chance alone.'
-                 f'{_lean_txt}<br>'
-                 f'Compare against the pitcher table above: the worst band '
-                 f'here has been a few points, where the strikeout props '
-                 f'ran <b style="color:var(--ink2)">13.5 points hot</b> at '
-                 f'65–80%. The hitter side is not carrying that '
-                 f'problem.</div>')
+                _d = _hl.dropna(subset=[_col, _tc]).copy()
+                _d["_y"] = ((_d[_tc] > _line).astype(float) if _line is not None
+                            else pd.to_numeric(_d[_tc], errors="coerce"))
+                _d = _d.dropna(subset=["_y"])
+                _first, _signs = True, []
+                for _i in range(10):
+                    _lo = _i / 10.0
+                    _hi = 1.01 if _i == 9 else (_i + 1) / 10.0
+                    _g = _d[(_d[_col] >= _lo) & (_d[_col] < _hi)]
+                    if len(_g) < 40:
+                        continue
+                    _said, _act = float(_g[_col].mean()), float(_g["_y"].mean())
+                    # Poisson-binomial: each row is its own coin, so the
+                    # variance is the sum of p(1-p), not n p_bar(1-p_bar).
+                    _se = (float(((_g[_col] * (1 - _g[_col])).sum())) ** 0.5
+                           / len(_g))
+                    _off = abs(_act - _said) > 2 * _se
+                    _n_band += 1
+                    _n_flag += int(_off)
+                    # Only bands with real weight count toward the lean below.
+                    # A 95-row band has an error bar of five points and its
+                    # SIGN is close to a coin flip, so letting one in flips a
+                    # genuine four-band lean to "mixed" -- which is exactly
+                    # what a 102-row +4.1% cell did to `1+ walk` on the first
+                    # pass, hiding the clearest pattern in the table.
+                    if len(_g) >= 200:
+                        _signs.append(_act - _said)
+                    _hr_rows += (
+                        f'<tr><td style="font-weight:560">'
+                        f'{_lab if _first else ""}</td>'
+                        f'<td style="color:var(--ink3)">'
+                        f'{_lo:.0%}–{min(_hi, 1):.0%}</td>'
+                        f'<td style="text-align:right">{len(_g):,}</td>'
+                        f'<td style="text-align:right">{_said:.1%}</td>'
+                        f'<td style="text-align:right">{_act:.1%}</td>'
+                        f'<td style="text-align:right;color:'
+                        f'{"var(--warn)" if _off else "var(--ink3)"}">'
+                        f'{_act - _said:+.1%}</td>'
+                        f'<td style="text-align:right;color:var(--ink3)">'
+                        f'±{_se:.1%}</td></tr>')
+                    _first = False
+                # Three or more WEIGHTY bands of one prop all leaning the same
+                # way is worth more than any single amber cell: an individual
+                # band clears two sigma on noise about one time in twenty, but
+                # a consistent sign across bands is the shape of a real bias.
+                if len(_signs) >= 3 and (all(x < 0 for x in _signs)
+                                         or all(x > 0 for x in _signs)):
+                    _leans.append((_lab, len(_signs),
+                                   "high" if _signs[0] < 0 else "low"))
+            if _hr_rows:
+                html(f'<div style="color:var(--ink3);font-size:12.5px;'
+                     f'margin-bottom:12px">{len(_hl):,} graded hitter-games '
+                     f'from {_hl["game_date"].nunique()} slates, in deciles. '
+                     f'A band needs 40 rows to appear, so each prop shows only '
+                     f'the range it actually occupies.</div>')
+                html(f'<table class="plain"><thead><tr><th>Prop</th>'
+                     f'<th>Model said</th>'
+                     f'<th style="text-align:right">n</th>'
+                     f'<th style="text-align:right">Mean said</th>'
+                     f'<th style="text-align:right">Happened</th>'
+                     f'<th style="text-align:right">Gap</th>'
+                     f'<th style="text-align:right">±</th></tr></thead>'
+                     f'<tbody>{_hr_rows}</tbody></table>')
+                _lean_txt = ""
+                if _leans:
+                    _lean_txt = (
+                        "<br><b style=\"color:var(--ink2)\">"
+                        + "; ".join(f"{_l} reads {_d} in all {_n} of its bands"
+                                    for _l, _n, _d in _leans)
+                        + ".</b> That matters more than any single amber cell: "
+                          "one band clears two sigma on noise about one time in "
+                          "twenty, but a consistent sign across bands is the "
+                          "shape of a real bias.")
+                html(f'<div style="margin-top:10px;font-size:12px;'
+                     f'color:var(--ink3);line-height:1.55">'
+                     f'{_n_flag} of {_n_band} bands clear two standard errors; '
+                     f'about {_n_band * 0.05:.1f} would on chance alone.'
+                     f'{_lean_txt}<br>'
+                     f'Compare against the pitcher table above: the worst band '
+                     f'here has been a few points, where the strikeout props '
+                     f'ran <b style="color:var(--ink2)">13.5 points hot</b> at '
+                     f'65–80%. The hitter side is not carrying that '
+                     f'problem.</div>')
 
     # ---- the velocity marker, grading itself -------------------------
     #
@@ -3776,68 +3785,69 @@ with tab_res:
     # pitcher_row_log.csv is the only file where the marker sits next to
     # the outcome: score_slate's _log_pitcher_rows copies both out of
     # pitchers_{date}.csv after the games.
-    _vlog = None
-    _vpath = os.path.join(CACHE_DIR, "pitcher_row_log.csv")
-    if os.path.exists(_vpath):
-        try:
-            _vlog = pd.read_csv(_vpath)
-        except Exception:
-            _vlog = None
-    if (_vlog is not None and "velo_state" in _vlog.columns
-            and "expected_k" in _vlog.columns
-            and "strikeouts" in _vlog.columns):
-        _v = _vlog.dropna(subset=["velo_state", "expected_k", "strikeouts"])
-        _v = _v[_v["velo_state"].isin(["Hot", "Normal", "Cold"])]
-        if len(_v) >= 12:
-            html('<div style="font-size:15px;font-weight:640;color:var(--ink);'
-                 'margin-top:30px">Velocity marker — is it real?</div>'
-                 '<div style="color:var(--ink3);font-size:12.5px;'
-                 'margin-bottom:12px">A starter whose fastball is off his '
-                 'own norm: does he miss fewer bats than his projection '
-                 'says? Shown only — the model does not use this.</div>')
-            _vr = ""
-            for _st in ("Hot", "Normal", "Cold"):
-                _g = _v[_v["velo_state"] == _st]
-                if _g.empty:
-                    continue
-                _gap = float((_g["strikeouts"] - _g["expected_k"]).mean())
-                _se = float(_g["strikeouts"].sub(_g["expected_k"]).std()
-                            / max(len(_g) ** 0.5, 1))
-                _vr += (f'<tr><td style="font-weight:560">{_st}</td>'
-                        f'<td style="text-align:right">{len(_g)}</td>'
-                        f'<td style="text-align:right">'
-                        f'{_g["expected_k"].mean():.2f}</td>'
-                        f'<td style="text-align:right">'
-                        f'{_g["strikeouts"].mean():.2f}</td>'
-                        f'<td style="text-align:right">{_gap:+.2f}</td>'
-                        f'<td style="text-align:right;color:var(--ink3)">'
-                        f'±{_se:.2f}</td></tr>')
-            html(f'<table class="plain"><thead><tr><th>Fastball</th>'
-                 f'<th style="text-align:right">Starts</th>'
-                 f'<th style="text-align:right">Projected K</th>'
-                 f'<th style="text-align:right">Actual K</th>'
-                 f'<th style="text-align:right">Gap</th>'
-                 f'<th style="text-align:right">±</th></tr></thead>'
-                 f'<tbody>{_vr}</tbody></table>')
-            _hot = _v[_v.velo_state == "Hot"]
-            _cold = _v[_v.velo_state == "Cold"]
-            if len(_hot) >= 5 and len(_cold) >= 5:
-                _h = float((_hot.strikeouts - _hot.expected_k).mean())
-                _c = float((_cold.strikeouts - _cold.expected_k).mean())
-                _sd = _v["strikeouts"].sub(_v["expected_k"]).std()
-                _sep = float(_sd * (1 / len(_hot) + 1 / len(_cold)) ** 0.5)
-                _z = (_h - _c) / _sep if _sep else 0
-                html(f'<div style="margin-top:10px;font-size:12.5px;'
-                     f'color:var(--ink3)">Hot minus cold: '
-                     f'<b style="color:var(--ink2)">{_h - _c:+.2f}</b> '
-                     f'strikeouts ±{_sep:.2f}, z = {_z:+.1f} — '
-                     f'<b style="color:'
-                     f'{"var(--warn)" if abs(_z) > 2 else "var(--ink3)"}">'
-                     f'{"separable from noise" if abs(_z) > 2 else "not yet separable from noise"}'
-                     f'</b>. History says to expect about +0.5; on '
-                     f'{len(_v)} starts the error bar is still wider than '
-                     f'that, so this row needs a season before it means '
-                     f'anything.</div>')
+    # Collapsed by default. Six sections of dense tables is a
+    # lot to scroll past when you came looking for one of them.
+    with st.expander("Velocity marker — is it real?", expanded=False):
+        _vlog = None
+        _vpath = os.path.join(CACHE_DIR, "pitcher_row_log.csv")
+        if os.path.exists(_vpath):
+            try:
+                _vlog = pd.read_csv(_vpath)
+            except Exception:
+                _vlog = None
+        if (_vlog is not None and "velo_state" in _vlog.columns
+                and "expected_k" in _vlog.columns
+                and "strikeouts" in _vlog.columns):
+            _v = _vlog.dropna(subset=["velo_state", "expected_k", "strikeouts"])
+            _v = _v[_v["velo_state"].isin(["Hot", "Normal", "Cold"])]
+            if len(_v) >= 12:
+                html('<div style="color:var(--ink3);font-size:12.5px;'
+                     'margin-bottom:12px">A starter whose fastball is off his '
+                     'own norm: does he miss fewer bats than his projection '
+                     'says? Shown only — the model does not use this.</div>')
+                _vr = ""
+                for _st in ("Hot", "Normal", "Cold"):
+                    _g = _v[_v["velo_state"] == _st]
+                    if _g.empty:
+                        continue
+                    _gap = float((_g["strikeouts"] - _g["expected_k"]).mean())
+                    _se = float(_g["strikeouts"].sub(_g["expected_k"]).std()
+                                / max(len(_g) ** 0.5, 1))
+                    _vr += (f'<tr><td style="font-weight:560">{_st}</td>'
+                            f'<td style="text-align:right">{len(_g)}</td>'
+                            f'<td style="text-align:right">'
+                            f'{_g["expected_k"].mean():.2f}</td>'
+                            f'<td style="text-align:right">'
+                            f'{_g["strikeouts"].mean():.2f}</td>'
+                            f'<td style="text-align:right">{_gap:+.2f}</td>'
+                            f'<td style="text-align:right;color:var(--ink3)">'
+                            f'±{_se:.2f}</td></tr>')
+                html(f'<table class="plain"><thead><tr><th>Fastball</th>'
+                     f'<th style="text-align:right">Starts</th>'
+                     f'<th style="text-align:right">Projected K</th>'
+                     f'<th style="text-align:right">Actual K</th>'
+                     f'<th style="text-align:right">Gap</th>'
+                     f'<th style="text-align:right">±</th></tr></thead>'
+                     f'<tbody>{_vr}</tbody></table>')
+                _hot = _v[_v.velo_state == "Hot"]
+                _cold = _v[_v.velo_state == "Cold"]
+                if len(_hot) >= 5 and len(_cold) >= 5:
+                    _h = float((_hot.strikeouts - _hot.expected_k).mean())
+                    _c = float((_cold.strikeouts - _cold.expected_k).mean())
+                    _sd = _v["strikeouts"].sub(_v["expected_k"]).std()
+                    _sep = float(_sd * (1 / len(_hot) + 1 / len(_cold)) ** 0.5)
+                    _z = (_h - _c) / _sep if _sep else 0
+                    html(f'<div style="margin-top:10px;font-size:12.5px;'
+                         f'color:var(--ink3)">Hot minus cold: '
+                         f'<b style="color:var(--ink2)">{_h - _c:+.2f}</b> '
+                         f'strikeouts ±{_sep:.2f}, z = {_z:+.1f} — '
+                         f'<b style="color:'
+                         f'{"var(--warn)" if abs(_z) > 2 else "var(--ink3)"}">'
+                         f'{"separable from noise" if abs(_z) > 2 else "not yet separable from noise"}'
+                         f'</b>. History says to expect about +0.5; on '
+                         f'{len(_v)} starts the error bar is still wider than '
+                         f'that, so this row needs a season before it means '
+                         f'anything.</div>')
 
     # ---- whole slips ------------------------------------------------
     #
@@ -3853,121 +3863,122 @@ with tab_res:
     #
     # Expected accumulates information every night even when nothing
     # lands, which a record does not.
-    _slog_path = os.path.join(CACHE_DIR, "slip_log.csv")
-    _slog = None
-    if os.path.exists(_slog_path):
-        try:
-            _slog = pd.read_csv(_slog_path).dropna(subset=["hit"])
-        except Exception:
-            _slog = None
+    # Collapsed by default. Six sections of dense tables is a
+    # lot to scroll past when you came looking for one of them.
+    with st.expander("Whole slips", expanded=False):
+        _slog_path = os.path.join(CACHE_DIR, "slip_log.csv")
+        _slog = None
+        if os.path.exists(_slog_path):
+            try:
+                _slog = pd.read_csv(_slog_path).dropna(subset=["hit"])
+            except Exception:
+                _slog = None
 
-    if _slog is not None and not _slog.empty:
-        _nights = _slog["game_date"].nunique()
-        html(f'<div style="font-size:15px;font-weight:640;color:var(--ink);'
-             f'margin-top:30px">Whole slips</div>'
-             f'<div style="color:var(--ink3);font-size:12.5px;'
-             f'margin-bottom:12px">Did every leg land? '
-             f'{len(_slog)} slips over {_nights} night'
-             f'{"s" if _nights != 1 else ""}, graded against the version '
-             f'committed before first pitch.</div>')
+        if _slog is not None and not _slog.empty:
+            _nights = _slog["game_date"].nunique()
+            html(f'<div style="color:var(--ink3);font-size:12.5px;'
+                 f'margin-bottom:12px">Did every leg land? '
+                 f'{len(_slog)} slips over {_nights} night'
+                 f'{"s" if _nights != 1 else ""}, graded against the version '
+                 f'committed before first pitch.</div>')
 
-        _rows = ""
-        for _t in ("MIXED", "SAFE", "MEDIUM", "LOTTO"):
-            _sub = _slog[_slog["tier"] == _t]
-            if _sub.empty:
-                continue
-            _exp = float(_sub["slip_p"].sum())
-            _act = float(_sub["hit"].sum())
-            # Poisson-binomial: the variance of a sum of independent
-            # indicators is the sum of p(1-p), NOT n*p*(1-p). Using the
-            # latter would overstate the error bar several times over on
-            # a tier whose slips have wildly different probabilities.
-            _se = float(((_sub["slip_p"] * (1 - _sub["slip_p"])).sum()) ** 0.5)
-            if _exp < 1:
-                _verdict, _vc = "too few expected to read yet", "var(--ink3)"
-            elif _se > 0 and abs(_act - _exp) > 2 * _se:
-                _verdict = "running hot" if _act > _exp else "running cold"
-                _vc = "var(--warn)"
-            else:
-                _verdict, _vc = "not yet separable from noise", "var(--ink3)"
-            _rows += (
-                f'<tr><td style="font-weight:560">{_t}</td>'
-                f'<td style="text-align:right">{len(_sub)}</td>'
-                f'<td style="text-align:right">{_exp:.1f}</td>'
-                f'<td style="text-align:right">{_act:.0f}</td>'
-                f'<td style="text-align:right">{_act - _exp:+.1f}</td>'
-                f'<td style="text-align:right;color:var(--ink3)">'
-                f'±{_se:.1f}</td>'
-                f'<td style="color:{_vc};font-size:12px">{_verdict}</td></tr>')
-        html(f'<table class="plain"><thead><tr><th>Tier</th>'
-             f'<th style="text-align:right">Slips</th>'
-             f'<th style="text-align:right">Expected</th>'
-             f'<th style="text-align:right">Hit</th>'
-             f'<th style="text-align:right">Gap</th>'
-             f'<th style="text-align:right">±</th>'
-             f'<th></th></tr></thead><tbody>{_rows}</tbody></table>')
-
-        # The one thing this data can measure that nothing else can.
-        #
-        # A slip's probability is the product of its legs, which is right
-        # only when they are independent. Two legs from one lineup share a
-        # pitcher, a park and a night, so they land together more often
-        # than the product implies. The tab has said so in words since it
-        # was built and has never been able to say by how much. Split the
-        # pool and the gap between the two halves IS the correlation.
-        if "correlated" in _slog.columns and _slog["correlated"].nunique() > 1:
-            _cr = ""
-            for _flag, _lab in ((False, "Legs in different games"),
-                                (True, "Two or more legs in one game")):
-                _sub = _slog[_slog["correlated"].astype(bool) == _flag]
+            _rows = ""
+            for _t in ("MIXED", "SAFE", "MEDIUM", "LOTTO"):
+                _sub = _slog[_slog["tier"] == _t]
                 if _sub.empty:
                     continue
                 _exp = float(_sub["slip_p"].sum())
                 _act = float(_sub["hit"].sum())
+                # Poisson-binomial: the variance of a sum of independent
+                # indicators is the sum of p(1-p), NOT n*p*(1-p). Using the
+                # latter would overstate the error bar several times over on
+                # a tier whose slips have wildly different probabilities.
                 _se = float(((_sub["slip_p"] * (1 - _sub["slip_p"])).sum()) ** 0.5)
-                _ratio = (f"{_act / _exp:.2f}×" if _exp > 0 else "—")
-                _cr += (
-                    f'<tr><td style="font-weight:560">{_lab}</td>'
+                if _exp < 1:
+                    _verdict, _vc = "too few expected to read yet", "var(--ink3)"
+                elif _se > 0 and abs(_act - _exp) > 2 * _se:
+                    _verdict = "running hot" if _act > _exp else "running cold"
+                    _vc = "var(--warn)"
+                else:
+                    _verdict, _vc = "not yet separable from noise", "var(--ink3)"
+                _rows += (
+                    f'<tr><td style="font-weight:560">{_t}</td>'
                     f'<td style="text-align:right">{len(_sub)}</td>'
                     f'<td style="text-align:right">{_exp:.1f}</td>'
                     f'<td style="text-align:right">{_act:.0f}</td>'
-                    f'<td style="text-align:right">{_ratio}</td>'
+                    f'<td style="text-align:right">{_act - _exp:+.1f}</td>'
                     f'<td style="text-align:right;color:var(--ink3)">'
-                    f'±{_se:.1f}</td></tr>')
-            html(f'<div style="font-size:13px;font-weight:620;'
-                 f'color:var(--ink);margin-top:20px">Is the correlation '
-                 f'warning worth a number yet?</div>'
-                 f'<table class="plain" style="margin-top:6px">'
-                 f'<thead><tr><th>Slip</th>'
+                    f'±{_se:.1f}</td>'
+                    f'<td style="color:{_vc};font-size:12px">{_verdict}</td></tr>')
+            html(f'<table class="plain"><thead><tr><th>Tier</th>'
                  f'<th style="text-align:right">Slips</th>'
                  f'<th style="text-align:right">Expected</th>'
                  f'<th style="text-align:right">Hit</th>'
-                 f'<th style="text-align:right">Actual ÷ expected</th>'
-                 f'<th style="text-align:right">±</th></tr></thead>'
-                 f'<tbody>{_cr}</tbody></table>')
+                 f'<th style="text-align:right">Gap</th>'
+                 f'<th style="text-align:right">±</th>'
+                 f'<th></th></tr></thead><tbody>{_rows}</tbody></table>')
 
-        html(f'<div style="margin-top:12px;font-size:12px;color:var(--ink3);'
-             f'line-height:1.55">'
-             f'<b style="color:var(--ink2)">Expected</b> is the sum of the '
-             f'committed slip probabilities — what should have landed if '
-             f'the numbers are honest. It is reported instead of a win-loss '
-             f'record because a record cannot be read: about 2.3 of 20 '
-             f'slips a night are expected to land, and a LOTTO slip roughly '
-             f'once every fifty-six nights, so <b style="color:var(--ink2)">'
-             f'0-for-200 on LOTTO is the correct-looking result, not a '
-             f'failure</b>. Telling a calibrated tier from one that is 20% '
-             f'off takes around 38 nights for SAFE, 286 for MEDIUM and '
-             f'5,500 for LOTTO — so SAFE is the only row that will say '
-             f'anything this season.<br>'
-             f'The <b style="color:var(--ink2)">±</b> is the Poisson-'
-             f'binomial standard deviation, the sum of p(1−p) across the '
-             f'slips, not n·p̄(1−p̄) — these slips have wildly different '
-             f'probabilities and the simpler formula would overstate the '
-             f'error bar several times over.<br>'
-             f'The second table is the only place the correlation warning '
-             f'can become a measurement. Slips whose legs share a game '
-             f'should beat their product, because the legs land together; '
-             f'clean slips should sit on it. If that gap opens up, the '
-             f'ratio is how much a same-game leg is really worth — and the '
-             f'<i>all hit</i> figure on the Bet ready tab is too low by '
-             f'about that factor.</div>')
+            # The one thing this data can measure that nothing else can.
+            #
+            # A slip's probability is the product of its legs, which is right
+            # only when they are independent. Two legs from one lineup share a
+            # pitcher, a park and a night, so they land together more often
+            # than the product implies. The tab has said so in words since it
+            # was built and has never been able to say by how much. Split the
+            # pool and the gap between the two halves IS the correlation.
+            if "correlated" in _slog.columns and _slog["correlated"].nunique() > 1:
+                _cr = ""
+                for _flag, _lab in ((False, "Legs in different games"),
+                                    (True, "Two or more legs in one game")):
+                    _sub = _slog[_slog["correlated"].astype(bool) == _flag]
+                    if _sub.empty:
+                        continue
+                    _exp = float(_sub["slip_p"].sum())
+                    _act = float(_sub["hit"].sum())
+                    _se = float(((_sub["slip_p"] * (1 - _sub["slip_p"])).sum()) ** 0.5)
+                    _ratio = (f"{_act / _exp:.2f}×" if _exp > 0 else "—")
+                    _cr += (
+                        f'<tr><td style="font-weight:560">{_lab}</td>'
+                        f'<td style="text-align:right">{len(_sub)}</td>'
+                        f'<td style="text-align:right">{_exp:.1f}</td>'
+                        f'<td style="text-align:right">{_act:.0f}</td>'
+                        f'<td style="text-align:right">{_ratio}</td>'
+                        f'<td style="text-align:right;color:var(--ink3)">'
+                        f'±{_se:.1f}</td></tr>')
+                html(f'<div style="font-size:13px;font-weight:620;'
+                     f'color:var(--ink);margin-top:20px">Is the correlation '
+                     f'warning worth a number yet?</div>'
+                     f'<table class="plain" style="margin-top:6px">'
+                     f'<thead><tr><th>Slip</th>'
+                     f'<th style="text-align:right">Slips</th>'
+                     f'<th style="text-align:right">Expected</th>'
+                     f'<th style="text-align:right">Hit</th>'
+                     f'<th style="text-align:right">Actual ÷ expected</th>'
+                     f'<th style="text-align:right">±</th></tr></thead>'
+                     f'<tbody>{_cr}</tbody></table>')
+
+            html(f'<div style="margin-top:12px;font-size:12px;color:var(--ink3);'
+                 f'line-height:1.55">'
+                 f'<b style="color:var(--ink2)">Expected</b> is the sum of the '
+                 f'committed slip probabilities — what should have landed if '
+                 f'the numbers are honest. It is reported instead of a win-loss '
+                 f'record because a record cannot be read: about 2.3 of 20 '
+                 f'slips a night are expected to land, and a LOTTO slip roughly '
+                 f'once every fifty-six nights, so <b style="color:var(--ink2)">'
+                 f'0-for-200 on LOTTO is the correct-looking result, not a '
+                 f'failure</b>. Telling a calibrated tier from one that is 20% '
+                 f'off takes around 38 nights for SAFE, 286 for MEDIUM and '
+                 f'5,500 for LOTTO — so SAFE is the only row that will say '
+                 f'anything this season.<br>'
+                 f'The <b style="color:var(--ink2)">±</b> is the Poisson-'
+                 f'binomial standard deviation, the sum of p(1−p) across the '
+                 f'slips, not n·p̄(1−p̄) — these slips have wildly different '
+                 f'probabilities and the simpler formula would overstate the '
+                 f'error bar several times over.<br>'
+                 f'The second table is the only place the correlation warning '
+                 f'can become a measurement. Slips whose legs share a game '
+                 f'should beat their product, because the legs land together; '
+                 f'clean slips should sit on it. If that gap opens up, the '
+                 f'ratio is how much a same-game leg is really worth — and the '
+                 f'<i>all hit</i> figure on the Bet ready tab is too low by '
+                 f'about that factor.</div>')
