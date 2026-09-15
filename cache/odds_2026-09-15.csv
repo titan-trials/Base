@@ -1,0 +1,16 @@
+market,player,line,prob_over,hold,n_books,commence_time,home_team,away_team,game_date,fetched_at_utc
+pitcher_strikeouts,Janson Junk,2.5,0.4979222937876584,0.06535875675079905,2,2026-09-16T01:40:00Z,Arizona Diamondbacks,Miami Marlins,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Martin Perez,3.5,0.541784417702891,0.0619905213998625,2,2026-09-15T23:40:00Z,Chicago Cubs,Atlanta Braves,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Jackson Kent,3.5,0.5371848068943506,0.061576354679802936,3,2026-09-15T22:45:00Z,Washington Nationals,Philadelphia Phillies,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Rhett Lowder,3.5,0.5123463240821582,0.06464086075736553,2,2026-09-15T22:40:00Z,Cincinnati Reds,Los Angeles Dodgers,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Max Fried,4.5,0.5650216070171721,0.06191593770002135,2,2026-09-15T23:40:00Z,Minnesota Twins,New York Yankees,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Michael Wacha,4.5,0.5614029600236967,0.06295096682764267,2,2026-09-16T00:10:00Z,Houston Astros,Kansas City Royals,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Michael Soroka,4.5,0.445749618097129,0.06325109179801669,2,2026-09-16T01:40:00Z,Arizona Diamondbacks,Miami Marlins,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Ryan Johnson,4.5,0.4151739715962931,0.06344728315929893,2,2026-09-16T01:38:00Z,Los Angeles Angels,Seattle Mariners,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Bailey Ober,4.5,0.40954628700234796,0.06162749869843698,2,2026-09-15T23:40:00Z,Minnesota Twins,New York Yankees,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Hunter Brown,5.5,0.5733441824773093,0.06538736853697491,2,2026-09-16T00:10:00Z,Houston Astros,Kansas City Royals,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Kevin Gausman,5.5,0.4979222937876584,0.06535875675079905,2,2026-09-15T23:40:00Z,Chicago Cubs,Atlanta Braves,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Yoshinobu Yamamoto,6.5,0.5904537129976519,0.06162749869843698,2,2026-09-15T22:40:00Z,Cincinnati Reds,Los Angeles Dodgers,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Cristopher Sanchez,6.5,0.48124062031015497,0.06070160739091124,3,2026-09-15T22:45:00Z,Washington Nationals,Philadelphia Phillies,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Logan Gilbert,6.5,0.47023106763366507,0.06331045003813873,2,2026-09-16T01:38:00Z,Los Angeles Angels,Seattle Mariners,2026-09-15,2026-09-15T02:19:50Z
+pitcher_strikeouts,Jacob Misiorowski,7.5,0.5371848068943506,0.05916159567275181,1,2026-09-15T22:41:00Z,Pittsburgh Pirates,Milwaukee Brewers,2026-09-15,2026-09-15T02:19:50Z
