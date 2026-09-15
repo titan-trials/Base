@@ -87,6 +87,34 @@ cache/*
 !cache/form_log.csv
 !cache/pitcher_scoring_log.csv
 
+# ---- the two ROW logs ------------------------------------------------
+#
+# Both were written, committed and pushed for days while the deployed app
+# showed nothing -- because `git add -A` skips an ignored file SILENTLY.
+# Locally everything rendered, so the gap only appeared as "the Results
+# tab is missing most of what it should have" on the website.
+#
+# These are not the per-slate summaries above. They are one row per
+# STARTER and per HITTER-GAME, and they are the only files in the project
+# where a probability sits next to the outcome it was graded against.
+# Without them the deployed app silently loses:
+#
+#   - the low-line warning on the Pitchers tab
+#   - "What a strikeout probability is worth"
+#   - "What a hitter probability is worth"
+#   - "Velocity marker -- is it real?"
+#
+# Every one of those degrades to nothing rather than to an error, which is
+# why this went unnoticed. Anything added to dashboard.py that reads a new
+# cache file needs a line here in the same commit.
+#
+# Size: pitcher_row_log ~230 KB, hitter_row_log ~1.2 MB and growing ~25 KB
+# a slate. Call it 10 MB a season for the pair -- the same bargain
+# pitchers_*.csv already makes, and nowhere near the statcast caches that
+# took .git to 1.1 GB.
+!cache/pitcher_row_log.csv
+!cache/hitter_row_log.csv
+
 # Closing lines, and the head-to-head record against them.
 #
 # These are the LEAST regenerable files in the project -- more so than the

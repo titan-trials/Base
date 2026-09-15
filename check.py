@@ -77,3 +77,46 @@ if _clock and "setInterval" in _clock[0] and "America/New_York" in _clock[0]:
     print("clock            ok    ticking, ballpark zone resolved")
 else:
     print("clock            FAIL  not rendered as a live component")
+
+# ---- does the DEPLOYED app get the files this page reads? -------------
+#
+# The dashboard degrades silently. A missing cache file does not raise --
+# every block that reads one is wrapped in `if os.path.exists(...)`, by
+# design, so a slate predicted before a feature existed still renders.
+# The cost of that design is this failure mode: on 2026-09-15 the low-line
+# warning and three whole Results sections were missing from the deployed
+# site for days while every one of them rendered locally, because
+# `cache/pitcher_row_log.csv` and `cache/hitter_row_log.csv` were never
+# whitelisted in .gitignore and `git add -A` skips an ignored file without
+# a word.
+#
+# .gitignore ignores `cache/*` and then negates the files the app needs,
+# so every new reader needs a new negation in the same commit. This checks
+# that they match.
+import re as _re, os as _os, fnmatch as _fn
+
+_src = open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                          "dashboard.py")).read()
+_gi_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                         ".gitignore")
+_reads = set(_re.findall(r'CACHE_DIR,\s*f?"([^"]+)"', _src))
+_reads |= set(_re.findall(r'cache_path\(f?"([^"]+)"', _src))
+_reads |= set(_re.findall(r'glob\.glob\([^)]*"([^"]*\.csv)"', _src))
+print()
+if not _os.path.exists(_gi_path):
+    print("gitignore         --    .gitignore not staged here; skipped")
+else:
+    _allow = set(_re.findall(r'^!cache/(\S+)', open(_gi_path).read(), _re.M))
+    _missing = []
+    for _p in sorted(_reads):
+        _b = _re.sub(r"\{[^}]+\}", "*", _os.path.basename(_p))
+        if not any(_fn.fnmatch(_b, _a) or _fn.fnmatch(_a, _b) for _a in _allow):
+            _missing.append(_b)
+    if _missing:
+        print(f"gitignore        FAIL  the deployed app will never see: "
+              f"{', '.join(_missing)}")
+        print("                       add !cache/<name> to .gitignore, or the "
+              "panel that reads it renders nothing on the website")
+    else:
+        print(f"gitignore        ok    all {len(_reads)} cache file(s) the "
+              f"dashboard reads are tracked")
