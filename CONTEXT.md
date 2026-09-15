@@ -2110,6 +2110,28 @@ true, and it was the justification for the whole file.
   `lab_coupling.py` stayed dead and got more so: r = -0.0662 at z = -6.17,
   still the wrong SIGN.
 
+### V12.3 ✅ (Sep 15, 2026) — the velocity marker confirmed, a fourth reversal
+  `lab_pitcher_form.py` re-run on all 196 caches (11,148 starts, up from
+  4,599), now reading `cache/distilled/` like the rest.
+  - **Velocity holds and strengthens**: r = +0.0815, z = +8.59 against a
+    200-permutation null. Survives the seasonal-arc control (+0.0821 with
+    season removed) and still does not predict batters faced (p = 0.41).
+    Worth +0.36 K over 23 batters at 2 sd off his own norm.
+  - **Recent K rate reverses from noise to real** — r = +0.019, p = 0.21 on
+    50 caches became r = +0.0335, z = +3.54 on 196. But it does NOT survive
+    alongside velocity: the two correlate at r = +0.19, and fitted together
+    recent K rate drops to z = +1.91 and +0.08 K while velocity is
+    untouched at z = +8.10. So the original decision to build the marker on
+    velocity and NOT on recent strikeout rate still stands — now for a
+    better reason than the one it was made for.
+  - **The control was the bug.** It was a single shuffle with a fixed seed,
+    and on this many starts one draw has an SE near 0.0095. It drew +0.0183
+    for recent K rate (p = 0.053), which reads like the null firing and the
+    real effect being contaminated. It was neither — averaged over 200
+    permutations the null sits at -0.0000 +/- 0.0095. A one-draw control is
+    not conservative, just noisy, and this one was noisy in the direction
+    that would have retired a real effect.
+
 ### NEXT — what the evidence points at, in order
   0. **Lower `K_PRIOR_BF` from 250.** The one live model change the
      evidence now supports, and it needs a design pass before it is made.
@@ -2126,10 +2148,13 @@ true, and it was the justification for the whole file.
      also prefers 150, though only by 0.04%, so bias balance is the real
      argument. A residual ~-0.06 K over-projection sits on every prior
      value and is NOT a shrinkage problem; it is still unexplained.
-  0b. **`lab_pitcher_form.py` has not been re-run** on the full set. The
-     velocity marker cleared at p = 0.001 on 50 caches and deserves
-     confirming at 4x. It is the one lab still reading raw caches rather
-     than `cache/distilled/`.
+  0b. ~~**`lab_pitcher_form.py` has not been re-run**~~ — **DONE.** The
+     velocity marker is confirmed and stronger (r = +0.0815, z = +8.59
+     against a 200-permutation null, over 11,148 starts), it survives the
+     seasonal-arc control, and it does not predict how long he lasts. It is
+     now a candidate to WIRE IN rather than only display: 2 sd off his own
+     norm is worth +0.36 K over 23 batters, comparable to the K_PRIOR_BF
+     tilt in item 0. Needs a design pass.
   1. **The information gap to the market** (r 0.46 vs 0.55). Not a
      calibration fix — the model is at 82% of its own optimal width and
      sits on the diagonal. It needs things it does not have: announced

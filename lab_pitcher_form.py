@@ -94,6 +94,16 @@ RECENT = 3             # how many prior starts make up "recent form"
 
 
 def per_start():
+    # Prefer the distilled table, like lab_shrinkage and lab_coupling. This
+    # was the last lab still opening 196 raw caches, and it is the lab whose
+    # conclusion changed most when the sample grew.
+    try:
+        import distilled
+        got = distilled.starts()
+    except Exception:
+        got = None
+    if got is not None and not got.empty:
+        return got[got["bf"] >= MIN_BF]
     """One row per (pitcher, start): date, batters faced, K, fastball mph."""
     rows = []
     for path in sorted(glob.glob(os.path.join(CACHE, "statcast_pitcher_*.csv"))):
@@ -179,6 +189,48 @@ def build(starts):
     return f[f["n_prior"] >= MIN_PRIOR]
 
 
+def permutation_null(f, col, label, n_perm=200):
+    """
+    The null as a DISTRIBUTION, not as one draw.
+
+    This started as a single shuffle with a fixed seed, and that is not
+    enough to read. On 11,148 starts a single permuted correlation has a
+    standard error near 0.0095, so an ordinary draw lands anywhere inside
+    roughly +/-0.019 -- and one did:
+
+        recent K rate, z (shuffled)   r = +0.0183  p = 0.053
+
+    which reads like the control firing and the real result being
+    contaminated. It was neither. Averaged over 200 permutations the null
+    sits where it should, at -0.0005 +/- 0.0095, and the observed +0.0340
+    is z = +3.63 against it.
+
+    A one-draw control is not conservative. It is just noisy, and it
+    happened to be noisy in the direction that would have retired a real
+    effect.
+    """
+    d = f.dropna(subset=[col, "resid"]).copy()
+    rng = np.random.default_rng(20260915)
+
+    def r_of(frame):
+        x = frame.copy()
+        for c in (col, "resid"):
+            x[c] = x[c] - x.groupby("pitcher")[c].transform("mean")
+        return float(stats.pearsonr(x[col], x["resid"])[0])
+
+    obs = r_of(d)
+    grp = d.groupby("pitcher")[col]
+    null = np.empty(n_perm)
+    for i in range(n_perm):
+        c = d.copy()
+        c[col] = grp.transform(lambda v: rng.permutation(v.values))
+        null[i] = r_of(c)
+    mu, sd = null.mean(), null.std(ddof=1)
+    print(f"  {label:<28} observed r={obs:+.4f}   null {mu:+.4f} "
+          f"+/- {sd:.4f}   z={(obs - mu) / sd:+.2f}   ({n_perm} permutations)")
+    return (obs - mu) / sd
+
+
 def report(f, col, label, unit=""):
     """
     Does this form feature predict the residual, WITHIN a pitcher?
@@ -227,6 +279,52 @@ def report(f, col, label, unit=""):
     return m_hi - m_lo, z
 
 
+def joint(f):
+    """
+    Two features that both clear a null are not two features.
+
+    Recent K rate and velocity correlate at r = +0.19 -- an arm that is
+    down a mile an hour is also, often, an arm that has been missing fewer
+    bats. So the question a model actually has to answer is not "does
+    recent K rate predict the residual" but "does it predict anything
+    velocity has not already said". Fitted together, on the same
+    within-pitcher de-meaned data:
+
+        recent K rate   +0.00187 +/- 0.00092   z = +2.04
+        velocity        +0.01099 +/- 0.00133   z = +8.23
+
+    Velocity barely moves from its solo slope of +0.01151. Recent K rate
+    falls from +0.00333 to +0.00187 -- it loses nearly half its effect to a
+    feature that was already there, and what survives is marginal.
+
+    This is why the marker was built on velocity and deliberately NOT on
+    recent strikeout rate. That call was made when recent K rate looked
+    like noise (r = +0.019, p = 0.21 on a quarter of the caches). It reads
+    differently now -- z = +3.54 on its own -- and the call still holds,
+    for a better reason than the one it was made for.
+    """
+    d = f.dropna(subset=["krate_z", "velo_z", "resid", "bf"]).copy()
+    for c in ("krate_z", "velo_z", "resid"):
+        d[c] = d[c] - d.groupby("pitcher")[c].transform("mean")
+    print("\nDO THEY SAY DIFFERENT THINGS?")
+    print(f"  the two features correlate at r = "
+          f"{stats.pearsonr(d.krate_z, d.velo_z)[0]:+.4f}")
+    X = np.column_stack([np.ones(len(d)), d.krate_z, d.velo_z])
+    y = d["resid"].to_numpy()
+    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    e = y - X @ beta
+    se = np.sqrt(np.diag(np.linalg.inv(X.T @ X) * (e @ e) / (len(d) - 3)))
+    print(f"  {'':<16} {'joint':>10} {'z':>7} {'alone':>10}   worth at 2 sd")
+    for nm, col, i in (("recent K rate", "krate_z", 1),
+                       ("velocity", "velo_z", 2)):
+        solo = float(np.polyfit(d[col], y, 1)[0])
+        print(f"  {nm:<16} {beta[i]:>+10.5f} {beta[i] / se[i]:>+7.2f} "
+              f"{solo:>+10.5f}   {beta[i] * 2 * d[col].std() * 23:+.2f} K "
+              f"over 23 batters")
+    print("  -> velocity is the feature; recent K rate is mostly velocity")
+    print("     showing through, and what is left of it is marginal.")
+
+
 def main():
     starts = per_start()
     if starts.empty:
@@ -252,15 +350,10 @@ def main():
     # baseline, the residual and the sample all stay exactly as they are,
     # and only the pairing is destroyed. Anything the real test finds that
     # this also finds is an artefact of the construction, not a signal.
+    joint(f)
     print("\nCONTROL -- form feature shuffled within each pitcher")
-    rng = np.random.default_rng(0)
-    c = f.copy()
-    for col in ("krate_z", "velo_z"):
-        c[col] = c.groupby("pitcher")[col].transform(
-            lambda s: rng.permutation(s.values))
-    report(c, "krate_z", "recent K rate, z (shuffled)")
-    print()
-    report(c, "velo_z", "fastball velocity, z (shuffled)")
+    permutation_null(f, "krate_z", "recent K rate, z")
+    permutation_null(f, "velo_z", "fastball velocity, z")
 
     # ---- the obvious alternative explanation --------------------------
     #
