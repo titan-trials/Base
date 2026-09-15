@@ -1113,10 +1113,41 @@ def main(game_date: str = None):
     actuals = load_actuals(predictions, game_date)
 
     step(4, "Hitter props", "model versus quoting the base rate")
-    merged = predictions.merge(
-        actuals.rename(columns={"batter": "player_id"}),
-        on="player_id", how="inner", suffixes=("", "_actual"),
-    )
+    # ---- merge on the GAME, not just the player -----------------------
+    #
+    # A doubleheader puts the same hitter in two games on one date, so both
+    # sides carry two rows for him. Joining on player_id alone makes a 2x2
+    # CROSS PRODUCT: four rows where there should be two, and half of them
+    # pair a prediction from game one with the outcome of game two.
+    #
+    # Measured on 2026-09-04 (CLE/DET): 58 rows for 29 players, every
+    # prediction duplicated, and 17 of the 29 pairs carrying two DIFFERENT
+    # outcomes for the same forecast. Those dates have been silently
+    # double-weighted, with half the pairings simply wrong, for as long as
+    # this scorer has existed. It only became visible when hitter_row_log
+    # started keeping the individual rows -- which is the entire argument
+    # for keeping them.
+    #
+    # `build_game_totals` groups by (batter, game_pk, game_date), so the
+    # actuals have always had the column needed to do this properly.
+    act = actuals.rename(columns={"batter": "player_id"})
+    keys = ["player_id"]
+    if "game_pk" in predictions.columns and "game_pk" in act.columns:
+        keys = ["player_id", "game_pk"]
+    merged = predictions.merge(act, on=keys, how="inner",
+                               suffixes=("", "_actual"))
+    if len(keys) == 2:
+        # A slate whose predicted game_pk does not match the one Statcast
+        # reports would silently lose every row to the stricter join. Fall
+        # back rather than report "nobody batted", and say so, because a
+        # wide gap here is a real problem worth seeing.
+        loose = len(predictions.merge(act, on="player_id", how="inner"))
+        if loose and len(merged) < loose * 0.9:
+            print(f"  (game_pk join kept {len(merged)} of {loose} rows -- "
+                  f"falling back to player_id; predicted and actual game ids "
+                  f"disagree on this slate.)")
+            merged = predictions.merge(act, on="player_id", how="inner",
+                                       suffixes=("", "_actual"))
     dropped = len(predictions) - len(merged)
     print(f"\n  {len(merged)} of {len(predictions)} predicted hitters actually "
           f"batted ({dropped} did not).")
