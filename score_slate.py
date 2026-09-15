@@ -305,6 +305,11 @@ def _log_pitcher_rows(basis: pd.DataFrame, game_date: str):
              # they keep doing the same job in the other direction: they
              # are how a bad adjustment gets caught.
              "velo_base", "velo_recent", "velo_drop", "velo_state",
+             # The strikeout-form marker, same contract the velocity one
+             # had before it was wired in: fed to nothing, and the only
+             # way it can ever earn its way in is by sitting next to the
+             # outcome in this file.
+             "kform_base", "kform_recent", "kform_z", "kform_state",
              # The whole strikeout distribution, ~200 bytes a row.
              #
              # Without it this log can only ever check the two lines that

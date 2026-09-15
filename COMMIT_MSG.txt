@@ -85,3 +85,40 @@ same commands. predict_slate imports pitcher_form as a module rather than
 reading a file it writes, so there is no new ordering requirement, and
 pitcher_form.main() still runs at step 3 and writes the dashboard file
 exactly as before.
+
+Strikeout-form marker: a Form column beside Velo
+
+Velocity measures how hard a pitcher is throwing. It does not measure how
+he has been DOING, and the two disagree most of the time -- on 8 sampled
+pitchers they gave different verdicts on 6. Landen Roupp on 2026-09-15 read
+velocity Normal (z = -0.21) while his last four starts sat 11 K in 89
+batters against his own 21.8%, a strikeout-form z of -2.15. The velocity
+marker had nothing to say about him.
+
+pitcher_form.py now computes kform_z/kform_state on the same shape as the
+velocity marker -- full cache, baseline excluding the recent window -- and
+writes them into pitchers_{date}.csv. dashboard.py shows a Form column next
+to Velo, coloured at the measured cut. score_slate keeps the four columns so
+the marker can grade itself against the outcome.
+
+DISPLAY ONLY, and it must stay that way. Recent K rate is real
+(r = +0.0335, z = +3.54 over 11,148 starts) but does NOT survive next to
+velocity: the two correlate at +0.19 and fitted jointly recent form falls to
+z = +1.91 while velocity is untouched. Feeding both would count most of the
+same signal twice.
+
+Window 4 starts, cut 1.25 sigma, both measured. Over ~10,500 starts,
+de-meaned within pitcher, flagged-Hot beats flagged-Cold by 1.8 points of
+strikeout rate on the NEXT start (z = +5.13), firing on 30% of rows. The
+window/cut cells tested are inside each other's error bars, so this is not a
+claim that 4/1.25 beats 3/1.50 -- four starts is ~90 batters rather than
+~70, and it is the stretch a person actually eyeballs.
+
+The first version of that measurement reported +4.5% at z = +12.67 and was
+wrong: `z` is computed against his baseline and the outcome was measured
+against the SAME baseline, so baseline noise pushed both the same way.
+De-meaning within pitcher removes it and the effect drops by a factor of
+three. Same shared-denominator trap as the order-penalty lab.
+
+Also: Form and Velo are now dropped from the table when a slate predates
+them, instead of rendering as an empty column.

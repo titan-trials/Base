@@ -90,6 +90,49 @@ VELO_WINDOW = 3
 VELO_CUT = 0.5
 
 
+# ---- the strikeout form marker --------------------------------------
+#
+# Velocity measures how hard he is throwing. This measures how he has
+# actually been DOING. They are not the same thing and they disagree:
+# Landen Roupp on 2026-09-15 sat at velocity z = -0.21 (normal) while his
+# last four starts ran 11 K in 89 batters against his own 21.8% -- a
+# strikeout-form z of -2.15. The velocity marker had nothing to say about
+# him. This one does.
+#
+# DISPLAY ONLY. It is not fed to predict_slate and must not be. Recent K
+# rate IS real (lab_pitcher_form.py, r = +0.0335, z = +3.54 over 11,148
+# starts) but it does NOT survive next to velocity -- the two correlate at
+# +0.19, and fitted jointly recent form drops to z = +1.91 and about 0.08 K
+# while velocity is untouched. Feeding both would be counting most of the
+# same signal twice. This exists to say "look closer", not to move a
+# number.
+#
+# WINDOW AND CUT, MEASURED
+# ------------------------
+# Over ~10,500 starts, de-meaned within pitcher, the gap in NEXT-start K
+# rate between flagged-hot and flagged-cold:
+#
+#     window 3, cut 1.50   fires 20%   +2.59%   z = +6.05
+#     window 4, cut 1.25   fires 30%   +1.81%   z = +5.13   <- this
+#     window 4, cut 1.50   fires 21%   +1.63%   z = +3.92
+#     window 5, cut 1.25   fires 31%   +1.64%   z = +4.69
+#
+# Those cells are inside each other's error bars (all +/- 0.3 to 0.4), so
+# this is not a claim that 4/1.25 beats 3/1.50. Four starts is ~90 batters
+# rather than ~70, which is the more stable window, and it is the stretch a
+# person actually eyeballs.
+#
+# THE NUMBER THIS IS NOT
+# ----------------------
+# The first version of this measurement reported +4.5% at z = +12.67 and
+# was wrong. `z` is computed against his baseline and the outcome was
+# measured against the SAME baseline, so baseline noise pushed both the
+# same way. De-meaning within pitcher removes it and the effect drops by a
+# factor of three. Same shared-denominator trap as the order-penalty lab.
+KFORM_WINDOW = 4
+KFORM_CUT = 1.25
+
+
 def per_start(pitcher_id, keep):
     """
     His most recent outings, newest first, or None.
@@ -181,6 +224,42 @@ def per_start(pitcher_id, keep):
     # yardstick.
     g["velo_sd"] = sd
     g["velo_z"] = (drop / sd) if (np.isfinite(sd) and sd > 0) else float("nan")
+
+    # ---- strikeout form, same shape, different question --------------
+    #
+    # Computed on the FULL cache for the same reason velocity is: the file
+    # only keeps the last ten starts and the baseline has to be his whole
+    # record. Baseline EXCLUDES the recent window -- including it puts the
+    # thing being measured inside its own yardstick.
+    #
+    # The z is against binomial error on his own rate, not against a
+    # spread of past z-scores, so a short window over few batters is
+    # correctly harder to flag than a long one.
+    if len(g) >= KFORM_WINDOW + 5:
+        rec = g.iloc[:KFORM_WINDOW]
+        old_g = g.iloc[KFORM_WINDOW:]
+        rec_bf, old_bf = float(rec["bf"].sum()), float(old_g["bf"].sum())
+        if rec_bf >= 30 and old_bf > 0:
+            k_base = float(old_g["k"].sum()) / old_bf
+            k_rec = float(rec["k"].sum()) / rec_bf
+            k_se = np.sqrt(k_base * (1 - k_base) / rec_bf)
+            k_z = (k_rec - k_base) / k_se if k_se > 0 else float("nan")
+        else:
+            k_base = k_rec = k_z = float("nan")
+    else:
+        k_base = k_rec = k_z = float("nan")
+    if not np.isfinite(k_z):
+        k_state = "Unknown"
+    elif k_z >= KFORM_CUT:
+        k_state = "Hot"
+    elif k_z <= -KFORM_CUT:
+        k_state = "Cold"
+    else:
+        k_state = "Normal"
+    g["kform_base"] = k_base
+    g["kform_recent"] = k_rec
+    g["kform_z"] = k_z
+    g["kform_state"] = k_state
     g["name"] = str(raw["player_name"].iloc[0]) if "player_name" in raw else ""
     return g.head(keep)
 
@@ -317,7 +396,8 @@ def main():
     out["game_date"] = out["game_date"].dt.strftime("%Y-%m-%d")
     marker = (out.drop_duplicates("pitcher_id")
                  [["pitcher_id", "velo_base", "velo_recent", "velo_drop",
-                   "velo_state"]])
+                   "velo_state", "kform_base", "kform_recent", "kform_z",
+                   "kform_state"]])
     out = out[["pitcher_id", "name", "game_date", "opp", "home", "pitches",
                "bf", "k", "last_inning", "velo"]]
 
@@ -343,10 +423,14 @@ def main():
                                         and c in pit_now.columns])
         pit_now = pit_now.merge(marker, on="pitcher_id", how="left")
         pit_now["velo_state"] = pit_now["velo_state"].fillna("Unknown")
+        pit_now["kform_state"] = pit_now["kform_state"].fillna("Unknown")
         pit_now.to_csv(pit_path, index=False)
         counts = pit_now["velo_state"].value_counts().to_dict()
         print(f"  Velocity marker written into cache/pitchers_{date}.csv: "
               + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
+        kc = pit_now["kform_state"].value_counts().to_dict()
+        print(f"  Strikeout-form marker: "
+              + ", ".join(f"{v} {k}" for k, v in sorted(kc.items())))
     except Exception as exc:
         print(f"  Could not write the velocity marker back "
               f"({type(exc).__name__}: {exc}). The form file is still "

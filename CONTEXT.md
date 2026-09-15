@@ -2159,6 +2159,26 @@ true, and it was the justification for the whole file.
   - `test_velocity.py` (16 checks) guards the two silent failures: a NaN z
     propagating into a blank projection, and the clamp not binding.
 
+### V12.5 ✅ (Sep 15, 2026) — the strikeout-form marker
+  Velocity says how hard he is throwing; it does not say how he has been
+  DOING. On 8 sampled pitchers the two markers disagreed on 6. Landen Roupp
+  read velocity Normal (z = -0.21) with his last four starts 2.15 sigma
+  under his own strikeout rate.
+  - `kform_z` / `kform_state` in `pitcher_form.py`, same shape as the
+    velocity marker; a **Form** column beside Velo; four columns kept by
+    `score_slate` so it can grade itself.
+  - **Display only, permanently.** Recent K rate is real but does not
+    survive next to velocity (jointly z = +1.91 against velocity's +8.10,
+    the two correlate at +0.19). Feeding both counts the same signal twice.
+  - Window 4, cut 1.25, measured: Hot beats Cold by 1.8 points of K rate on
+    the next start, z = +5.13, firing on 30% of rows. The window/cut cells
+    tested are inside each other's error bars.
+  - **The first measurement said +4.5% at z = +12.67 and was wrong** — `z`
+    and the outcome were both computed against the same baseline, so
+    baseline noise pushed both the same way. De-meaning within pitcher cut
+    the effect by a factor of three. Same shared-denominator trap as the
+    order-penalty lab.
+
 ### WATCH — both changes are live and neither has been graded
   Every pitcher on the board moves tonight. `pitcher_row_log.csv` records
   `k_rate` and the `velo_*` fields per start, so the two are separable

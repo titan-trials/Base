@@ -1704,9 +1704,24 @@ with tab_pitch:
             # baseline. Written by pitcher_form.py, which can read the
             # statcast caches this app never will.
             "Velo": pd.to_numeric(pit.get("velo_drop"), errors="coerce"),
+            # How he has been DOING, as against how hard he is throwing.
+            # The two disagree often -- Landen Roupp on 2026-09-15 read
+            # velocity Normal while his last four starts sat 2.15 sigma
+            # under his own strikeout rate. Display only: recent K rate is
+            # real but does not survive next to velocity, so it is not fed
+            # to anything. See KFORM_WINDOW in pitcher_form.py.
+            "Form": pd.to_numeric(pit.get("kform_z"), errors="coerce"),
             "BF": pd.to_numeric(pit["expected_bf"], errors="coerce"),
             "K": pd.to_numeric(pit["expected_k"], errors="coerce"),
         })
+        # A slate predicted before the strikeout-form marker existed has no
+        # kform_z, and an all-empty column is worse than no column. Velo
+        # predates this guard and gets it too, so an old cache renders the
+        # same way it always did.
+        for _c in ("Form", "Velo"):
+            if _c in pit_view and not pit_view[_c].notna().any():
+                pit_view = pit_view.drop(columns=[_c])
+
         PIT_PROPS = {}
 
         # ---- the strikeout line, one per pitcher ---------------------
@@ -1848,6 +1863,15 @@ with tab_pitch:
                     f"color:{_css_var('b4ink')}" if v > 0 else
                     f"color:{_css_var('warn')}" for v in col],
                 subset=["Velo"])
+        if "Form" in pit_view:
+            # Same treatment as Velo and the same logic: the cut is the
+            # 1.25 sigma pitcher_form.py measured, not a round number.
+            pit_styled = pit_styled.apply(
+                lambda col: [
+                    "" if pd.isna(v) or abs(v) < 1.25 else
+                    f"color:{_css_var('b4ink')}" if v > 0 else
+                    f"color:{_css_var('warn')}" for v in col],
+                subset=["Form"])
         if "Edge" in pit_view:
             pit_styled = pit_styled.apply(pit_edge_fill, subset=["Edge"])
         if "Books" in pit_view:
@@ -1857,6 +1881,8 @@ with tab_pitch:
                         "Rest": "{:.0f}"})
         if "Velo" in pit_view:
             pit_fmt["Velo"] = "{:+.1f}"
+        if "Form" in pit_view:
+            pit_fmt["Form"] = "{:+.1f}"
         for _c, _f in (("Line", "{:.1f}"), ("Over", "{:.1%}"),
                        ("Mkt", "{:.1%}"), ("Edge", "{:+.1%}"),
                        ("Books", "{:.0f}")):
@@ -1895,6 +1921,21 @@ with tab_pitch:
                      "'reliever' pitches regularly but has not started. "
                      "'unknown' is a debut or a long layoff, and gets the "
                      "new-pitcher prior."),
+            "Form": st.column_config.Column(
+                width=58,
+                help="How his STRIKEOUTS have been going, not how hard he "
+                     "is throwing — his last four starts against his own "
+                     "rate, in standard errors. Velocity and this one "
+                     "disagree most of the time, which is the point: an "
+                     "arm can be at full speed and still not be missing "
+                     "bats. Measured over ~10,500 starts, a starter "
+                     "flagged Hot beats one flagged Cold by 1.8 points of "
+                     "strikeout rate on his NEXT start (z = +5.1) — real, "
+                     "but a fifth of what it looks like before the "
+                     "shared-baseline artifact is removed. Shown, never "
+                     "fed to the model: recent form does not survive "
+                     "alongside velocity, so using both would count the "
+                     "same signal twice."),
             "Velo": st.column_config.Column(
                 width=58,
                 help="Fastball mph over his last three starts against his "
