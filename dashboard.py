@@ -3613,6 +3613,105 @@ with tab_res:
                  'a constant baked in today would be fitted to one '
                  'September.</div>')
 
+    # ---- the same question for the hitters ---------------------------
+    #
+    # A prop can read said 11.5% / happened 11.5% across 3,700 rows and
+    # still be badly hot in the band a LOTTO leg is actually picked from.
+    # That is precisely how the strikeout props read fine in aggregate
+    # while running 13.5 points hot at 65-80%, and until 2026-09-15 the
+    # hitter side had no file that could show it: scoring_log.csv keeps
+    # per-slate aggregates, and by the time a slate is summarised every
+    # individual probability has been averaged away.
+    #
+    # hitter_row_log.csv keeps the rows. This reads them.
+    _hl = None
+    _hpath = os.path.join(CACHE_DIR, "hitter_row_log.csv")
+    if os.path.exists(_hpath):
+        try:
+            _hl = pd.read_csv(_hpath)
+        except Exception:
+            _hl = None
+    if _hl is not None and len(_hl) >= 300:
+        # (prediction column, truth, label). A count line is graded the
+        # same way score_slate grades it, so the two cannot drift.
+        _HB = [("prob_hr", ("got_hr", None), "HR"),
+               ("prob_hit", ("got_hit", None), "1+ hit"),
+               ("prob_walk", ("got_walk", None), "1+ walk"),
+               ("prob_hits_over_1.5", ("hits", 1.5), "Hits 1.5"),
+               ("prob_tb_over_1.5", ("total_bases", 1.5), "TB 1.5"),
+               ("prob_hrr_over_1.5", ("hrr", 1.5), "H+R+RBI 1.5")]
+        _hr_rows, _n_flag, _n_band = "", 0, 0
+        for _col, (_tc, _line), _lab in _HB:
+            if _col not in _hl.columns or _tc not in _hl.columns:
+                continue
+            _d = _hl.dropna(subset=[_col, _tc]).copy()
+            _d["_y"] = ((_d[_tc] > _line).astype(float) if _line is not None
+                        else pd.to_numeric(_d[_tc], errors="coerce"))
+            _d = _d.dropna(subset=["_y"])
+            _first = True
+            for _lo, _hi in ((0, .10), (.10, .20), (.20, .30), (.30, 1.01)):
+                _g = _d[(_d[_col] >= _lo) & (_d[_col] < _hi)]
+                if len(_g) < 25:
+                    continue
+                _said, _act = float(_g[_col].mean()), float(_g["_y"].mean())
+                # Poisson-binomial: each row is its own coin, so the
+                # variance is the sum of p(1-p) rather than n p_bar(1-p_bar).
+                _se = (float(((_g[_col] * (1 - _g[_col])).sum())) ** 0.5
+                       / len(_g))
+                _off = abs(_act - _said) > 2 * _se
+                _n_band += 1
+                _n_flag += int(_off)
+                _hr_rows += (
+                    f'<tr><td style="font-weight:560">'
+                    f'{_lab if _first else ""}</td>'
+                    f'<td style="color:var(--ink3)">'
+                    f'{_lo:.0%}–{min(_hi, 1):.0%}</td>'
+                    f'<td style="text-align:right">{len(_g):,}</td>'
+                    f'<td style="text-align:right">{_said:.1%}</td>'
+                    f'<td style="text-align:right">{_act:.1%}</td>'
+                    f'<td style="text-align:right;color:'
+                    f'{"var(--warn)" if _off else "var(--ink3)"}">'
+                    f'{_act - _said:+.1%}</td>'
+                    f'<td style="text-align:right;color:var(--ink3)">'
+                    f'±{_se:.1%}</td></tr>')
+                _first = False
+        if _hr_rows:
+            html(f'<div style="font-size:15px;font-weight:640;'
+                 f'color:var(--ink);margin-top:30px">'
+                 f'What a hitter probability is worth</div>'
+                 f'<div style="color:var(--ink3);font-size:12.5px;'
+                 f'margin-bottom:12px">{len(_hl):,} graded hitter-games '
+                 f'from {_hl["game_date"].nunique()} slates. The band that '
+                 f'matters for a LOTTO leg is the bottom one on each prop, '
+                 f'because that is where those legs are picked from.</div>')
+            html(f'<table class="plain"><thead><tr><th>Prop</th>'
+                 f'<th>Model said</th>'
+                 f'<th style="text-align:right">n</th>'
+                 f'<th style="text-align:right">Mean said</th>'
+                 f'<th style="text-align:right">Happened</th>'
+                 f'<th style="text-align:right">Gap</th>'
+                 f'<th style="text-align:right">±</th></tr></thead>'
+                 f'<tbody>{_hr_rows}</tbody></table>')
+            # The multiple-comparisons line is not decoration. With this
+            # many bands on screen, roughly one in twenty clears two sigma
+            # on noise alone, and an amber cell that is simply the expected
+            # one is the easiest way to talk yourself into a fix that is
+            # not needed.
+            _exp = _n_band * 0.05
+            html(f'<div style="margin-top:10px;font-size:12px;'
+                 f'color:var(--ink3);line-height:1.55">'
+                 f'{_n_flag} of {_n_band} bands clear two standard errors; '
+                 f'about {_exp:.1f} would on chance alone, so treat an '
+                 f'amber cell as something to watch rather than something '
+                 f'to fix. What would matter is several bands of the same '
+                 f'prop leaning the same way, or a gap the size of the '
+                 f'strikeout one above.<br>'
+                 f'Compare against the pitcher table: the worst band here '
+                 f'has been a couple of points, where the strikeout props '
+                 f'ran <b style="color:var(--ink2)">13.5 points hot</b> at '
+                 f'65–80%. The hitter side is not carrying that '
+                 f'problem.</div>')
+
     # ---- the velocity marker, grading itself -------------------------
     #
     # Same contract the hitter hot/cold marker has: shown, logged, fed to
