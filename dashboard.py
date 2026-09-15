@@ -3616,14 +3616,23 @@ with tab_res:
     # ---- the same question for the hitters ---------------------------
     #
     # A prop can read said 11.5% / happened 11.5% across 3,700 rows and
-    # still be badly hot in the band a LOTTO leg is actually picked from.
-    # That is precisely how the strikeout props read fine in aggregate
-    # while running 13.5 points hot at 65-80%, and until 2026-09-15 the
-    # hitter side had no file that could show it: scoring_log.csv keeps
-    # per-slate aggregates, and by the time a slate is summarised every
-    # individual probability has been averaged away.
+    # still be badly hot in the band a LOTTO leg is picked from. That is
+    # how the strikeout props read fine in aggregate while running 13.5
+    # points hot at 65-80%, and until 2026-09-15 the hitter side had no
+    # file that could show it.
     #
-    # hitter_row_log.csv keeps the rows. This reads them.
+    # BANDS ARE DECILES, and that is the whole point of the table.
+    #
+    # The first version used four buckets (0-10, 10-20, 20-30, 30-100),
+    # which suited HR and destroyed everything else: `1+ hit` lives
+    # entirely above 30%, so its every row landed in ONE cell reading
+    # -1.7%, and the table said less than the summary at the top of this
+    # page already does. Split into deciles the same prop shows -4.2% at
+    # 50-60% and -0.6% at 60-70% -- a real miscalibration in the band
+    # where half its rows sit, invisible the other way.
+    #
+    # A band needs 40 rows to appear. Fewer than that and the error bar is
+    # wider than anything it could reveal.
     _hl = None
     _hpath = os.path.join(CACHE_DIR, "hitter_row_log.csv")
     if os.path.exists(_hpath):
@@ -3632,15 +3641,13 @@ with tab_res:
         except Exception:
             _hl = None
     if _hl is not None and len(_hl) >= 300:
-        # (prediction column, truth, label). A count line is graded the
-        # same way score_slate grades it, so the two cannot drift.
         _HB = [("prob_hr", ("got_hr", None), "HR"),
                ("prob_hit", ("got_hit", None), "1+ hit"),
                ("prob_walk", ("got_walk", None), "1+ walk"),
                ("prob_hits_over_1.5", ("hits", 1.5), "Hits 1.5"),
                ("prob_tb_over_1.5", ("total_bases", 1.5), "TB 1.5"),
                ("prob_hrr_over_1.5", ("hrr", 1.5), "H+R+RBI 1.5")]
-        _hr_rows, _n_flag, _n_band = "", 0, 0
+        _hr_rows, _n_flag, _n_band, _leans = "", 0, 0, []
         for _col, (_tc, _line), _lab in _HB:
             if _col not in _hl.columns or _tc not in _hl.columns:
                 continue
@@ -3648,19 +3655,29 @@ with tab_res:
             _d["_y"] = ((_d[_tc] > _line).astype(float) if _line is not None
                         else pd.to_numeric(_d[_tc], errors="coerce"))
             _d = _d.dropna(subset=["_y"])
-            _first = True
-            for _lo, _hi in ((0, .10), (.10, .20), (.20, .30), (.30, 1.01)):
+            _first, _signs = True, []
+            for _i in range(10):
+                _lo = _i / 10.0
+                _hi = 1.01 if _i == 9 else (_i + 1) / 10.0
                 _g = _d[(_d[_col] >= _lo) & (_d[_col] < _hi)]
-                if len(_g) < 25:
+                if len(_g) < 40:
                     continue
                 _said, _act = float(_g[_col].mean()), float(_g["_y"].mean())
                 # Poisson-binomial: each row is its own coin, so the
-                # variance is the sum of p(1-p) rather than n p_bar(1-p_bar).
+                # variance is the sum of p(1-p), not n p_bar(1-p_bar).
                 _se = (float(((_g[_col] * (1 - _g[_col])).sum())) ** 0.5
                        / len(_g))
                 _off = abs(_act - _said) > 2 * _se
                 _n_band += 1
                 _n_flag += int(_off)
+                # Only bands with real weight count toward the lean below.
+                # A 95-row band has an error bar of five points and its
+                # SIGN is close to a coin flip, so letting one in flips a
+                # genuine four-band lean to "mixed" -- which is exactly
+                # what a 102-row +4.1% cell did to `1+ walk` on the first
+                # pass, hiding the clearest pattern in the table.
+                if len(_g) >= 200:
+                    _signs.append(_act - _said)
                 _hr_rows += (
                     f'<tr><td style="font-weight:560">'
                     f'{_lab if _first else ""}</td>'
@@ -3675,15 +3692,23 @@ with tab_res:
                     f'<td style="text-align:right;color:var(--ink3)">'
                     f'±{_se:.1%}</td></tr>')
                 _first = False
+            # Three or more WEIGHTY bands of one prop all leaning the same
+            # way is worth more than any single amber cell: an individual
+            # band clears two sigma on noise about one time in twenty, but
+            # a consistent sign across bands is the shape of a real bias.
+            if len(_signs) >= 3 and (all(x < 0 for x in _signs)
+                                     or all(x > 0 for x in _signs)):
+                _leans.append((_lab, len(_signs),
+                               "high" if _signs[0] < 0 else "low"))
         if _hr_rows:
             html(f'<div style="font-size:15px;font-weight:640;'
                  f'color:var(--ink);margin-top:30px">'
                  f'What a hitter probability is worth</div>'
                  f'<div style="color:var(--ink3);font-size:12.5px;'
                  f'margin-bottom:12px">{len(_hl):,} graded hitter-games '
-                 f'from {_hl["game_date"].nunique()} slates. The band that '
-                 f'matters for a LOTTO leg is the bottom one on each prop, '
-                 f'because that is where those legs are picked from.</div>')
+                 f'from {_hl["game_date"].nunique()} slates, in deciles. '
+                 f'A band needs 40 rows to appear, so each prop shows only '
+                 f'the range it actually occupies.</div>')
             html(f'<table class="plain"><thead><tr><th>Prop</th>'
                  f'<th>Model said</th>'
                  f'<th style="text-align:right">n</th>'
@@ -3692,22 +3717,23 @@ with tab_res:
                  f'<th style="text-align:right">Gap</th>'
                  f'<th style="text-align:right">±</th></tr></thead>'
                  f'<tbody>{_hr_rows}</tbody></table>')
-            # The multiple-comparisons line is not decoration. With this
-            # many bands on screen, roughly one in twenty clears two sigma
-            # on noise alone, and an amber cell that is simply the expected
-            # one is the easiest way to talk yourself into a fix that is
-            # not needed.
-            _exp = _n_band * 0.05
+            _lean_txt = ""
+            if _leans:
+                _lean_txt = (
+                    "<br><b style=\"color:var(--ink2)\">"
+                    + "; ".join(f"{_l} reads {_d} in all {_n} of its bands"
+                                for _l, _n, _d in _leans)
+                    + ".</b> That matters more than any single amber cell: "
+                      "one band clears two sigma on noise about one time in "
+                      "twenty, but a consistent sign across bands is the "
+                      "shape of a real bias.")
             html(f'<div style="margin-top:10px;font-size:12px;'
                  f'color:var(--ink3);line-height:1.55">'
                  f'{_n_flag} of {_n_band} bands clear two standard errors; '
-                 f'about {_exp:.1f} would on chance alone, so treat an '
-                 f'amber cell as something to watch rather than something '
-                 f'to fix. What would matter is several bands of the same '
-                 f'prop leaning the same way, or a gap the size of the '
-                 f'strikeout one above.<br>'
-                 f'Compare against the pitcher table: the worst band here '
-                 f'has been a couple of points, where the strikeout props '
+                 f'about {_n_band * 0.05:.1f} would on chance alone.'
+                 f'{_lean_txt}<br>'
+                 f'Compare against the pitcher table above: the worst band '
+                 f'here has been a few points, where the strikeout props '
                  f'ran <b style="color:var(--ink2)">13.5 points hot</b> at '
                  f'65–80%. The hitter side is not carrying that '
                  f'problem.</div>')
