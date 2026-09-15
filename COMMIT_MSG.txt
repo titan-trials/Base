@@ -67,3 +67,21 @@ import it without the slate pipeline.
 
 Tests: test_velocity.py 16/16 (new), test_workload.py 32/32,
 test_relief_tier.py, test_slips.py, check.py 6/6.
+
+Row log: record the rate the projection actually used
+
+`expected_k` and `k_dist` are built from the velocity-adjusted rate, but
+the row was writing `workload.k_rate(pid)` -- the unadjusted one. Two
+numbers side by side that do not multiply out, and `k_rate` is the field
+the calibration work reads to attribute a miss.
+
+`k_rate` is now the rate used. `k_rate_base` (pre-adjustment) and
+`velo_z_used` are logged alongside it, and both are added to
+score_slate's keep list. K_PRIOR_BF and velocity went live the same
+night; without those two columns neither could ever be graded alone.
+
+Runbook is unchanged: run_slate's six steps run in the same order with the
+same commands. predict_slate imports pitcher_form as a module rather than
+reading a file it writes, so there is no new ordering requirement, and
+pitcher_form.main() still runs at step 3 and writes the dashboard file
+exactly as before.

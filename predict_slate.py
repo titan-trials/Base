@@ -291,7 +291,18 @@ def build_pitcher_props(frame, starters, game_date, workload, pa):
             "days_since_last_appearance":
                 workload.days_since_last_appearance(pid, game_date),
             "role": workload.role(pid),
-            "k_rate": workload.k_rate(pid),
+            # The rate the projection ACTUALLY used, velocity included.
+            # `expected_k` and `k_dist` below are built from it, so logging
+            # the unadjusted rate here would put two numbers side by side
+            # that do not multiply out -- and `k_rate` is the field the
+            # calibration work reads to attribute a miss.
+            "k_rate": _k_rate,
+            # The pre-adjustment rate and the input that moved it, so the
+            # velocity change can be separated from the K_PRIOR_BF change
+            # after the fact. Both landed on the same night; without these
+            # two columns neither could ever be graded alone.
+            "k_rate_base": workload.k_rate(pid),
+            "velo_z_used": _vz,
             "expected_k": expected,
             # Outs recorded. Fitted in the same window as batters faced
             # and shrunk the same way; see WorkloadModel.fit. Model only

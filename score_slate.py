@@ -291,13 +291,19 @@ def _log_pitcher_rows(basis: pd.DataFrame, game_date: str):
     keep = (["pitcher", "pitcher_id", "team", "opponent", "starts_seen",
              "career_starts", "days_since_last_start", "expected_bf",
              "expected_k", "expected_outs", "implied_baserunners", "k_rate",
+             # `k_rate` is now the rate the projection USED, velocity
+             # included. These two make the adjustment reversible: the
+             # K_PRIOR_BF change and the velocity change both went live on
+             # 2026-09-15, and without them neither could be graded alone.
+             "k_rate_base", "velo_z_used",
              "batters_faced", "strikeouts", "innings_pitched",
              "outs_recorded",
-             # The velocity form marker, carried through so it can grade
-             # ITSELF against the strikeout residual in this same file.
-             # It is fed to nothing -- same contract the hitter marker
-             # has -- so the only way it ever earns its way into the
-             # model is by these columns sitting next to the outcome.
+             # The velocity form marker. It used to be fed to nothing --
+             # displayed beside a projection it was not allowed to affect
+             # -- and these columns were the only way it could ever grade
+             # itself into the model. As of 2026-09-15 it IS fed in, and
+             # they keep doing the same job in the other direction: they
+             # are how a bad adjustment gets caught.
              "velo_base", "velo_recent", "velo_drop", "velo_state",
              # The whole strikeout distribution, ~200 bytes a row.
              #
