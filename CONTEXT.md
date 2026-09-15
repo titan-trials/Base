@@ -1880,6 +1880,15 @@ true, and it was the justification for the whole file.
 ---
 
 ## Key Research Findings
+- **"HR is a coin flip" is FALSE and was superseded — corrected 2026-09-15.**
+  The bullet below is a V2 TRAINING result (`train_v3.py`, `train_bridge.py`,
+  AUC 0.51–0.54) and it does not describe the deployed model. Graded over 16
+  live slates and 3,538 rows, `prob_hr` has the **highest AUC of any hitter
+  prop**: 0.625 mean per slate, sd 0.067, z = +7.5 against no skill, above
+  0.500 on 15 of 16 slates. Calibration is near-exact — said 11.52%,
+  happened 11.50%. The per-PA rate engine (V5) and the pitch-mix style-fit
+  feature replaced what the V2 experiment measured. Keep the bullet below
+  for the lesson about feature SHAPE; do not read it as a live fact about HR.
 - **Consistent individual skills predict better than rare/bursty events.**
   Walk rate (plate discipline — a stable, repeated behavioral tendency)
   produced the best player-level AUC (~0.59). HR (a rare, high-variance

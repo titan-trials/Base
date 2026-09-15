@@ -16,3 +16,15 @@ window,tier,n_legs,n_graded,slip_p,legs_hit,hit,n_games,solo,correlated,legs,gam
 4,MEDIUM,3,3,0.0476816686770339,2.0,0.0,1,True,True,Fernando Tatis Jr. Hits 1.5 + Bryce Eldridge Walk + Drew Gilbert Walk,2026-09-13
 4,MIXED,3,3,0.0225857855911795,1.0,0.0,1,True,True,Fernando Tatis Jr. H+R+RBI 0.5 + Bryce Eldridge Walk + Dustin Harris Hits 2.5,2026-09-13
 4,SAFE,3,3,0.3503404898657145,3.0,1.0,1,True,True,Fernando Tatis Jr. H+R+RBI 0.5 + Jackson Merrill H+R+RBI 0.5 + Manny Machado H+R+RBI 0.5,2026-09-13
+0,LOTTO,3,3,0.0125418855214515,1.0,0.0,7,False,False,Aaron Judge HR + Pete Alonso HR + Mookie Betts HR,2026-09-14
+0,MEDIUM,3,3,0.0736077280927644,2.0,0.0,7,False,False,Gavin Williams Under 7.5 K + Aaron Judge TB 2.5 + Kevin McGonigle Walk,2026-09-14
+0,MIXED,4,4,0.0396610932323004,2.0,0.0,7,False,False,Gavin Williams Under 7.5 K + Aaron Judge H+R+RBI 0.5 + Kevin McGonigle Walk + Pete Alonso HR,2026-09-14
+0,SAFE,3,3,0.4335623559695926,1.0,0.0,7,False,False,Aaron Judge H+R+RBI 0.5 + Mookie Betts H+R+RBI 0.5 + Ronald Acuña Jr. H+R+RBI 0.5,2026-09-14
+1,LOTTO,3,3,0.0066716400926035,0.0,0.0,1,True,True,Fernando Tatis Jr. Hits 2.5 + Hunter Goodman HR + Jackson Merrill HR,2026-09-14
+1,MEDIUM,3,3,0.0406339789112548,2.0,0.0,1,True,True,Fernando Tatis Jr. Hits 1.5 + Jackson Merrill TB 2.5 + Hunter Goodman TB 2.5,2026-09-14
+1,MIXED,3,3,0.0629117357205559,2.0,0.0,1,True,True,Fernando Tatis Jr. H+R+RBI 0.5 + Jackson Merrill TB 2.5 + Hunter Goodman HR,2026-09-14
+1,SAFE,3,3,0.4287262646595293,3.0,1.0,1,True,True,Fernando Tatis Jr. H+R+RBI 0.5 + Manny Machado H+R+RBI 0.5 + Jackson Merrill H+R+RBI 0.5,2026-09-14
+2,LOTTO,3,3,0.0028886101098217,1.0,0.0,2,False,True,Cal Raleigh HR + Gabriel Moreno Hits 2.5 + Mike Trout HR,2026-09-14
+2,MEDIUM,3,3,0.1067350762875484,1.0,0.0,2,False,True,J.P. Crawford Walk + Lars Nootbaar Walk + Mike Trout Walk,2026-09-14
+2,MIXED,3,3,0.0620654698390792,2.0,0.0,2,False,True,Mike Trout H+R+RBI 0.5 + Lars Nootbaar Walk + Cal Raleigh HR,2026-09-14
+2,SAFE,3,3,0.3627862351038067,3.0,1.0,2,False,True,Mike Trout H+R+RBI 0.5 + Ketel Marte H+R+RBI 0.5 + Randy Arozarena H+R+RBI 0.5,2026-09-14

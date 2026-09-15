@@ -57,6 +57,36 @@ class _Sidebar(_Ctx):
     def __getattr__(self, name): return getattr(ST, name)
 
 
+class _ComponentsV1(types.ModuleType):
+    """
+    Importable as `streamlit.components.v1`, because that is how the
+    dashboard reaches it: `st.components` is not a guaranteed attribute of
+    the streamlit module, so the documented form is an explicit submodule
+    import -- and an explicit import needs a real entry in sys.modules,
+    which render() installs.
+    """
+    def __init__(self):
+        super().__init__("streamlit.components.v1")
+
+    def html(self, *a, **k):
+        CALLS.append(("components.html", a, k))
+
+
+class _Components:
+    """
+    st.components.v1 -- the escape hatch to real JavaScript.
+
+    Streamlit strips <script> from markdown, so anything that has to tick
+    on its own clock goes through here instead; it renders into an iframe
+    where the browser runs the script normally. The harness records the
+    call so a check can assert the clock is on the page, but nothing
+    executes: there is no browser here, and a fake that tried to run the
+    JS would be testing a JS engine rather than the dashboard.
+    """
+
+    v1 = None          # filled in below, so both paths reach one object
+
+
 class _Slot:
     """What st.empty() hands back: anything written to it renders in place."""
 
@@ -77,6 +107,7 @@ class FakeStreamlit(types.ModuleType):
         self.query_params = _Params()
         self.session_state = _State()
         self.column_config = _ColumnConfig()
+        self.components = _Components()
         self.sidebar = _Sidebar()
 
     # --- recorded no-ops ------------------------------------------------
@@ -146,6 +177,8 @@ class FakeStreamlit(types.ModuleType):
 
 
 ST = FakeStreamlit()
+COMPONENTS_V1 = _ComponentsV1()
+ST.components.v1 = COMPONENTS_V1
 
 
 def render(cache_dir, query=None, label=""):
@@ -154,6 +187,13 @@ def render(cache_dir, query=None, label=""):
     ST.query_params = _Params(query or {})
     ST.session_state = _State()
     sys.modules["streamlit"] = ST
+    # `import streamlit.components.v1 as components` walks sys.modules for
+    # each level, so every level has to be present or the import fails
+    # before dashboard.py has rendered a single row.
+    comp = types.ModuleType("streamlit.components")
+    comp.v1 = COMPONENTS_V1
+    sys.modules["streamlit.components"] = comp
+    sys.modules["streamlit.components.v1"] = COMPONENTS_V1
 
     # pandas Styler -> our stub, so .apply(axis=None) chains don't try to
     # actually compute CSS over the frame.

@@ -69,6 +69,12 @@ import os
 import numpy as np
 import pandas as pd
 import streamlit as st
+# The documented entry point for real JavaScript. `st.components` is not a
+# guaranteed attribute of the streamlit module -- it only exists once this
+# submodule has been imported somewhere -- so it is imported explicitly
+# rather than reached through `st.`, which would work on one version and
+# raise AttributeError on another.
+import streamlit.components.v1 as components
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 
@@ -727,6 +733,84 @@ confirmed = int((df.get("lineup_status") == "confirmed").sum())
 projected = int((df.get("lineup_status") == "projected").sum())
 written = pd.Timestamp(os.path.getmtime(path), unit="s", tz="UTC") \
             .tz_convert("America/New_York")
+
+# ---- the live clock ---------------------------------------------------
+#
+# WHY A COMPONENT AND NOT MARKDOWN
+# --------------------------------
+# Streamlit strips <script> out of st.markdown, so a clock written that way
+# renders the time the server happened to send and then sits there, wrong,
+# until something else triggers a rerun. st.components.v1.html renders into
+# an iframe where the browser runs the script normally, so this ticks on
+# its own and costs the server nothing -- no reruns, no polling, no
+# st.rerun loop burning a websocket message a second.
+#
+# WHY THE BROWSER'S CLOCK AND NOT THE SERVER'S
+# --------------------------------------------
+# Everything time-shaped in this app is already anchored to
+# America/New_York -- fmt_dt prints ET, when_label asks what day it is in
+# ET, and start_time_utc is converted to ET for every game row. That is the
+# calendar baseball is scheduled on. But the machine running this is not
+# necessarily on either clock: deployed it runs in UTC, and "your time"
+# means the person looking at the screen.
+#
+# So both halves come from the viewer's own browser. Intl.DateTimeFormat
+# with a timeZone does the ET conversion, which means daylight saving is
+# handled by the browser's tz database rather than by a hardcoded three
+# hours that would silently go wrong twice a year -- and the offset line
+# is computed from the two rendered times rather than assumed, so it reads
+# correctly from anywhere.
+_TZ_BALLPARK = "America/New_York"
+components.html(
+    """
+<style>
+  body{margin:0;font:500 12px/1.25 Archivo,system-ui,-apple-system,sans-serif;
+       color:#8a8880;background:transparent}
+  .w{display:flex;justify-content:flex-end;gap:14px;align-items:baseline}
+  .b{white-space:nowrap}
+  .t{font-variant-numeric:tabular-nums;color:#c3c2b7;font-weight:600}
+  .l{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em}
+  .o{color:#8a8880;font-size:10.5px}
+</style>
+<div class="w">
+  <span class="b"><span class="l">you</span> <span class="t" id="a">--:--</span></span>
+  <span class="b"><span class="l">ballpark</span> <span class="t" id="b">--:--</span></span>
+  <span class="o" id="o"></span>
+</div>
+<script>
+const ZONE = "__ZONE__";
+// Same options for both, so the two strings are comparable and the only
+// difference is the zone.
+const opt = {hour:"numeric", minute:"2-digit", second:"2-digit", hour12:true};
+const here = new Intl.DateTimeFormat([], opt);
+const park = new Intl.DateTimeFormat([], Object.assign({timeZone: ZONE}, opt));
+// Offset from the two zones' actual UTC offsets right now, so it survives
+// daylight saving on either side and reads 0 when they are the same zone.
+function offsetHours(d){
+  const f = z => new Date(new Intl.DateTimeFormat("en-US", {timeZone:z,
+      year:"numeric",month:"2-digit",day:"2-digit",
+      // hourCycle h23, not hour12:false. Some engines (Safari
+      // historically) render midnight as "24:00:00" under hour12:false,
+      // which Date() then refuses to parse -- so the offset would go NaN
+      // for exactly one hour a night and the label would blank out.
+      hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"})
+      .format(d).replace(",", ""));
+  const mine = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return Math.round((f(ZONE) - f(mine)) / 36e5);
+}
+function tick(){
+  const d = new Date();
+  document.getElementById("a").textContent = here.format(d);
+  document.getElementById("b").textContent = park.format(d);
+  const h = offsetHours(d);
+  document.getElementById("o").textContent =
+    h === 0 ? "same zone" : (h > 0 ? "+" : "") + h + "h";
+}
+tick();
+setInterval(tick, 1000);
+</script>
+""".replace("__ZONE__", _TZ_BALLPARK),
+    height=24)
 
 with top_r:
     all_in = projected == 0
