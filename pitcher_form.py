@@ -161,18 +161,115 @@ def per_start(pitcher_id, keep):
     if len(velo) >= VELO_WINDOW + 3:
         recent = float(velo.iloc[:VELO_WINDOW].mean())
         base = float(velo.iloc[VELO_WINDOW:].mean())
+        sd = float(velo.iloc[VELO_WINDOW:].std(ddof=1))
         drop = recent - base
         state = ("Hot" if drop >= VELO_CUT
                  else "Cold" if drop <= -VELO_CUT else "Normal")
     else:
-        recent = base = drop = float("nan")
+        recent = base = drop = sd = float("nan")
         state = "Unknown"                   # too little history to say
     g["velo_recent"] = recent
     g["velo_base"] = base
     g["velo_drop"] = drop
     g["velo_state"] = state
+    # The drop in units of his OWN start-to-start variation, which is what
+    # the projection consumes. A mile an hour means something different for
+    # an arm that ranges two ticks a night than for one that never moves,
+    # and lab_pitcher_form.py measured the effect per standard deviation.
+    # Measured on the baseline starts only, for the same reason the mean is:
+    # including the window puts the thing being measured inside its own
+    # yardstick.
+    g["velo_sd"] = sd
+    g["velo_z"] = (drop / sd) if (np.isfinite(sd) and sd > 0) else float("nan")
     g["name"] = str(raw["player_name"].iloc[0]) if "player_name" in raw else ""
     return g.head(keep)
+
+
+
+# ---- the velocity adjustment --------------------------------------------
+#
+# A starter whose fastball is down off his OWN norm misses fewer bats.
+# Measured in lab_pitcher_form.py over 11,148 starts: r = +0.0815 at
+# z = +8.59 against a 200-permutation null, surviving the seasonal-arc
+# control, and NOT predicting how long he lasts (r = +0.008, p = 0.41) --
+# so it moves the rate and must not touch the batters-faced distribution.
+#
+# The slope below is re-measured in the exact form it ships, which is not
+# the same number the lab prints:
+#
+#   lab, expanding baseline, uncapped          +0.0114 per sd
+#   12-month baseline (what k_rate uses)       +0.0106 per sd
+#   12-month baseline, production window defn  +0.0093 per sd   <- this
+#
+# Both corrections matter. `k_rate` is a trailing-12-month rate, so it has
+# already absorbed part of a recent decline and the full expanding-baseline
+# slope would count it twice. And `pitcher_form.per_start` excludes the
+# recent window from its own baseline, which the lab does not -- shipping a
+# slope measured on one definition while feeding it a feature built on
+# another is the mismatch this project keeps catching.
+#
+# n = 9,846, r = +0.0752, p = 8e-14.
+VELO_K_SLOPE = 0.0093
+# Clamped so a pitcher with thin or erratic velocity history cannot swing
+# his own projection on very little. 4.9% of starts reach the clamp, and at
+# it the adjustment is about 0.43 K over 23 batters.
+VELO_Z_CAP = 2.0
+
+
+def apply_velocity(k_rate, velo_z):
+    """His strikeout rate, nudged by how his arm is throwing right now."""
+    if velo_z is None or not np.isfinite(velo_z):
+        return k_rate              # Unknown: no history, no opinion
+    z = float(np.clip(velo_z, -VELO_Z_CAP, VELO_Z_CAP))
+    return float(np.clip(k_rate + VELO_K_SLOPE * z, 0.01, 0.60))
+
+
+# ---------------------------------------------------------------------
+# what the projection calls
+# ---------------------------------------------------------------------
+def velocity_for(pitcher_ids, window=None):
+    """
+    The velocity marker for a set of pitchers, without needing a slate file.
+
+    WHY THIS EXISTS AS A FUNCTION
+    -----------------------------
+    The marker used to be produced only as a side effect of `main()`, which
+    reads `cache/pitchers_{date}.csv` -- a file `predict_slate` writes. So
+    the marker could only ever exist AFTER the projection it should have
+    been informing. It was a thing the dashboard displayed next to a number
+    it had not been allowed to affect.
+
+    `predict_slate` now calls this before it projects. Nothing about
+    run_slate's step order changes, and `main()` below is untouched, so the
+    dashboard file keeps being written exactly as before.
+
+    Returns a DataFrame indexed by pitcher_id with velo_base, velo_recent,
+    velo_sd, velo_drop, velo_z and velo_state. A pitcher with too little
+    history is present with NaN and state "Unknown" rather than missing,
+    so a caller joining on this cannot silently drop him.
+    """
+    keep = window or 1
+    rows = []
+    for pid in pd.unique(pd.Series(list(pitcher_ids)).dropna()):
+        try:
+            got = per_start(int(pid), keep)
+        except Exception:
+            got = None
+        if got is None or got.empty:
+            rows.append({"pitcher_id": int(pid), "velo_base": float("nan"),
+                         "velo_recent": float("nan"), "velo_sd": float("nan"),
+                         "velo_drop": float("nan"), "velo_z": float("nan"),
+                         "velo_state": "Unknown"})
+            continue
+        r = got.iloc[0]
+        rows.append({"pitcher_id": int(pid),
+                     "velo_base": float(r["velo_base"]),
+                     "velo_recent": float(r["velo_recent"]),
+                     "velo_sd": float(r["velo_sd"]),
+                     "velo_drop": float(r["velo_drop"]),
+                     "velo_z": float(r["velo_z"]),
+                     "velo_state": str(r["velo_state"])})
+    return pd.DataFrame(rows).set_index("pitcher_id")
 
 
 def main():

@@ -1,19 +1,69 @@
-Addendum 2: lab_pitcher_form.py re-run (the last one outstanding)
+Lower K_PRIOR_BF to 150; wire the velocity marker into the projection
 
-11,148 starts, up from 4,599, now reading cache/distilled/ like the rest.
+Two model changes, both measured on all 196 statcast caches rather than
+the 50 the earlier work ran against.
 
-  - The velocity marker HOLDS and strengthens: r = +0.0815 at z = +8.59
-    against a 200-permutation null, surviving the seasonal-arc control and
-    still not predicting batters faced. Worth +0.36 K over 23 batters at
-    2 sd off a pitcher's own norm -- comparable to the K_PRIOR_BF tilt, and
-    now a candidate to wire into the model rather than only display.
-  - Recent K rate reverses from noise (r = +0.019, p = 0.21) to real
-    (r = +0.0335, z = +3.54) -- but does NOT survive alongside velocity.
-    The two correlate at +0.19; fitted jointly, recent K rate falls to
-    z = +1.91 and +0.08 K while velocity is untouched. Building the marker
-    on velocity and not on recent strikeout rate was the right call, and is
-    still the right call for a better reason.
-  - The single-shuffle control is replaced with a 200-permutation null. One
-    draw at this sample size has an SE near 0.0095 and it drew +0.0183,
-    which reads like contamination and was not. A one-draw control is not
-    conservative, just noisy.
+1. K_PRIOR_BF 250 -> 150
+
+On the model's own trailing-12-month window shape, over 9,723 starts,
+negative meaning the model over-projects:
+
+    prior      soft       mid     power
+      150   -0.049K   -0.081K   -0.019K
+      250   -0.204K   -0.083K   +0.146K   <- was live
+
+250 is not wrong in aggregate -- total bias is flat at -0.06 across the
+whole range -- it is wrong as a TILT, pulling soft arms up and letting
+power arms sag. A 0.35 K spread between arm types at 250; 0.03 K at 150.
+
+Soft arms are exactly the pitchers carrying 2.5 and 3.5 lines, where the
+calibration curve has the model saying 73.8% and the thing happening
+60.3%. Priced through k_count_distribution, the 0.204 K is worth about 3
+points of probability at a 3.5 line -- the first located component of that
+gap.
+
+lab_shrinkage.py's RMSE sweep also moved its optimum from 250 to 150, but
+only by 0.04%, so RMSE is not the argument. Bias balance is.
+
+A residual ~-0.08 K over-projection sits on the mid group at every value
+of this constant. Lowering it does not touch that, and it is still
+unexplained.
+
+2. The velocity marker now affects the projection, not just the display
+
+It was computed by pitcher_form.py AFTER predict_slate ran -- the marker
+read the file the projection wrote -- so the dashboard displayed it beside
+a number it had not been allowed to affect.
+
+pitcher_form.velocity_for() now returns the marker for a set of pitcher
+ids straight from the statcast caches, and predict_slate calls it before
+projecting. run_slate's step order is unchanged and pitcher_form.main()
+is untouched, so the dashboard file is still written exactly as before.
+
+The slope is re-measured in the exact form it ships, which is NOT the
+number lab_pitcher_form.py prints:
+
+    lab, expanding baseline, uncapped          +0.0114 per sd
+    12-month baseline (what k_rate uses)       +0.0106 per sd
+    12-month baseline, production window defn  +0.0093 per sd   <- shipped
+
+Both corrections matter. k_rate is a trailing-12-month rate and has
+already absorbed part of a recent decline, so the expanding-baseline slope
+would count it twice; and pitcher_form excludes the recent window from its
+own baseline where the lab does not. Shipping a slope measured on one
+definition while feeding it a feature built on another is the mismatch
+this project keeps catching. n = 9,846, r = +0.0752, p = 8e-14.
+
+Clamped at +/-2 sd: 4.9% of starts reach it, and at the clamp the
+adjustment is about 0.43 K over 23 batters. It moves the RATE only --
+velocity does not predict how long a pitcher lasts (r = +0.008, p = 0.41)
+-- so the batters-faced distribution is untouched. A pitcher with too
+little velocity history comes back present and "Unknown" with a NaN z, and
+apply_velocity passes his rate through unchanged.
+
+The adjustment lives in pitcher_form.py beside the feature it scales, so
+the constant sits next to the thing it was measured on and a test can
+import it without the slate pipeline.
+
+Tests: test_velocity.py 16/16 (new), test_workload.py 32/32,
+test_relief_tier.py, test_slips.py, check.py 6/6.

@@ -2132,29 +2132,43 @@ true, and it was the justification for the whole file.
     not conservative, just noisy, and this one was noisy in the direction
     that would have retired a real effect.
 
+### V12.4 ✅ (Sep 15, 2026) — two model changes, both from the full sample
+  The first changes to the model itself after a week of measurement.
+  - **`K_PRIOR_BF` 250 -> 150.** 250 is not wrong in aggregate (total bias
+    is flat at -0.06 K across the whole range) but wrong as a TILT: on the
+    model's own trailing-12-month shape over 9,723 starts it over-projects
+    soft arms by 0.204 K while letting power arms sag by 0.146, a 0.35 K
+    spread. At 150 that spread is 0.03 K. Soft arms carry the 2.5 and 3.5
+    lines, so this is worth ~3 points of probability exactly where the
+    calibration curve is worst.
+  - **The velocity marker now reaches the projection.** It was computed by
+    `pitcher_form.py` AFTER `predict_slate` ran, so the dashboard showed it
+    beside a number it could not affect. `pitcher_form.velocity_for()` now
+    serves it from the statcast caches and `predict_slate` calls it before
+    projecting; run_slate's step order and `pitcher_form.main()` are
+    unchanged. Slope +0.0093 per sd, clamped at +/-2 (4.9% of starts reach
+    it, ~0.43 K at the clamp), rate only — velocity does not predict
+    batters faced (p = 0.41).
+  - **The slope is not the number the lab prints.** +0.0114 expanding and
+    uncapped; +0.0106 against a 12-month baseline, because `k_rate` is
+    already a 12-month rate and would count part of the decline twice;
+    +0.0093 once the production window definition is used, since
+    `pitcher_form` excludes the recent window from its baseline and the lab
+    does not. Measuring the slope in the exact form it ships is the whole
+    point of the last three sessions.
+  - `test_velocity.py` (16 checks) guards the two silent failures: a NaN z
+    propagating into a blank projection, and the clamp not binding.
+
+### WATCH — both changes are live and neither has been graded
+  Every pitcher on the board moves tonight. `pitcher_row_log.csv` records
+  `k_rate` and the `velo_*` fields per start, so the two are separable
+  after the fact. Before trusting either, check the Results calibration
+  curve after ~10 slates: the low-line band should close some of its
+  -13.5 points if the prior change did what it measured.
+
 ### NEXT — what the evidence points at, in order
-  0. **Lower `K_PRIOR_BF` from 250.** The one live model change the
-     evidence now supports, and it needs a design pass before it is made.
-     On the model's own trailing-12-month window shape, over 9,723 starts,
-     250 tilts hard between arm types and 150 does not:
-
-         prior      soft       mid     power
-           150   -0.049K   -0.081K   -0.019K
-           250   -0.204K   -0.083K   +0.146K   <- live
-
-     Soft arms are exactly the pitchers carrying 2.5 and 3.5 lines, and
-     0.204 K of over-projection there is worth ~3-4 points of probability
-     — the first located component of the -13.5 point low-line gap. RMSE
-     also prefers 150, though only by 0.04%, so bias balance is the real
-     argument. A residual ~-0.06 K over-projection sits on every prior
-     value and is NOT a shrinkage problem; it is still unexplained.
-  0b. ~~**`lab_pitcher_form.py` has not been re-run**~~ — **DONE.** The
-     velocity marker is confirmed and stronger (r = +0.0815, z = +8.59
-     against a 200-permutation null, over 11,148 starts), it survives the
-     seasonal-arc control, and it does not predict how long he lasts. It is
-     now a candidate to WIRE IN rather than only display: 2 sd off his own
-     norm is worth +0.36 K over 23 batters, comparable to the K_PRIOR_BF
-     tilt in item 0. Needs a design pass.
+  0. ~~**Lower `K_PRIOR_BF` from 250.**~~ **DONE (V12.4)** — now 150.
+  0b. ~~**Wire the velocity marker in**~~ — **DONE (V12.4).**
   1. **The information gap to the market** (r 0.46 vs 0.55). Not a
      calibration fix — the model is at 82% of its own optimal width and
      sits on the diagonal. It needs things it does not have: announced

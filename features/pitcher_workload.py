@@ -140,7 +140,28 @@ RELIEF_PRIOR_APPEARANCES = 12.0
 # starts before his own rate outweighs the league's -- strikeout ability is
 # a real and fairly stable skill, but a handful of starts is still mostly
 # noise about it.
-K_PRIOR_BF = 250.0
+# Lowered from 250 on 2026-09-15. 250 was chosen when lab_shrinkage.py ran
+# against 50 of the 196 statcast caches; on all of them, and measured on the
+# model's own trailing-12-month window shape over 9,723 starts, 250 does not
+# sit wrong in aggregate but sits wrong as a TILT:
+#
+#     prior      soft       mid     power      (negative = over-projected)
+#       150   -0.049K   -0.081K   -0.019K
+#       250   -0.204K   -0.083K   +0.146K
+#
+# A 0.35 K spread between arm types at 250, 0.03 K at 150. Soft arms are
+# exactly the pitchers carrying 2.5 and 3.5 lines, where the calibration
+# curve has the model saying 73.8% and the thing happening 60.3%, so the
+# 0.204 K lands where it does the most damage -- about 3 points of
+# probability at a 3.5 line.
+#
+# lab_shrinkage.py's RMSE sweep also moved its optimum from 250 to 150, but
+# only by 0.04%, so RMSE is not the argument here. Bias balance is.
+#
+# A residual ~-0.08 K over-projection sits on the mid group at EVERY value
+# of this constant. That is not a shrinkage problem and lowering this does
+# not touch it; it is still unexplained.
+K_PRIOR_BF = 150.0
 
 # Extra spread in the per-batter strikeout rate: how uncertain the
 # pitcher's form tonight is, over and above who he is.

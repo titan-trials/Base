@@ -53,6 +53,12 @@ import pandas as pd
 warnings.filterwarnings("ignore")
 
 from config import START_DATE
+# The velocity adjustment lives with the feature it scales,
+# in pitcher_form.py, so the slope sits beside the thing it
+# was measured on and a test can import it without dragging
+# in the whole slate pipeline.
+from pitcher_form import (VELO_K_SLOPE, VELO_Z_CAP,
+                          apply_velocity, velocity_for)
 from data.schedule import get_slate, tomorrow
 from data.roster import build_slate_hitters
 from data.refresh import refresh_players, data_age_days, needs_refresh
@@ -220,6 +226,21 @@ def build_pitcher_props(frame, starters, game_date, workload, pa):
     batter_league = float(recent["is_k"].mean()) if len(recent) >= 5000 \
         else float(pa["is_k"].mean())
     platoon = measure_k_platoon(pa, game_date)
+    # Velocity for tonight's starters, read straight from the statcast
+    # caches. This used to be computed by pitcher_form.py AFTER this file
+    # ran, which meant the dashboard displayed it beside a projection it had
+    # not been allowed to affect.
+    try:
+        velo_tbl = velocity_for(starters["pid"].dropna().astype(int).tolist())
+    except Exception as exc:
+        print(f"  (velocity unavailable: {type(exc).__name__}: {exc} "
+              f"-- projecting without it)")
+        velo_tbl = pd.DataFrame()
+    if len(velo_tbl):
+        n_known = int((velo_tbl["velo_state"] != "Unknown").sum())
+        print(f"  Velocity: {n_known}/{len(velo_tbl)} starters have enough "
+              f"history; slope {VELO_K_SLOPE:+.4f} per sd, capped at "
+              f"+/-{VELO_Z_CAP:.0f}.")
     print(f"  Hitter-side league K rate (12 mo): {batter_league:.4f}; "
           f"platoon odds x{platoon['same']:.3f} same-hand, "
           f"x{platoon['opposite']:.3f} opposite.")
@@ -237,8 +258,12 @@ def build_pitcher_props(frame, starters, game_date, workload, pa):
         edge = lineup["platoon_edge"].to_numpy(dtype=float) \
             if "platoon_edge" in lineup.columns else np.ones(len(lineup))
         factor = np.where(edge > 0, platoon["opposite"], platoon["same"])
+        _vz = float("nan")
+        if len(velo_tbl) and pid in velo_tbl.index:
+            _vz = velo_tbl.at[pid, "velo_z"]
+        _k_rate = apply_velocity(workload.k_rate(pid), _vz)
         p_by_batter = per_batter_k_probs(bat_rates, batter_league,
-                                         workload.k_rate(pid), factor)
+                                         _k_rate, factor)
         if not np.isfinite(p_by_batter).all() or len(p_by_batter) == 0:
             continue
 
