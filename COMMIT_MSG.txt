@@ -1,124 +1,45 @@
-Lower K_PRIOR_BF to 150; wire the velocity marker into the projection
+Hitter row log, so the hitter props can be audited the way the pitchers are
 
-Two model changes, both measured on all 196 statcast caches rather than
-the 50 the earlier work ran against.
+cache/scoring_log.csv keeps one row per PROP per slate -- n, base_rate,
+mean_pred, auc, brier. That says whether a prop works and nothing else. It
+cannot answer "is the model calibrated at the TOP of its range", because by
+the time a slate is summarised every individual probability has been
+averaged away.
 
-1. K_PRIOR_BF 250 -> 150
+That is exactly the question that mattered on the pitcher side. The
+strikeout props read fine in aggregate and were 13.5 points hot in the
+65-80% band, and the only reason anyone could see it is that
+pitcher_row_log.csv stores the per-start distribution. The hitter side had
+no equivalent, so the same failure would have been invisible: a prop can
+read said 11.5% / happened 11.5% across 3,538 rows while the handful of
+rows above 30% -- the ones a LOTTO leg is actually picked from -- run
+badly hot.
 
-On the model's own trailing-12-month window shape, over 9,723 starts,
-negative meaning the model over-projects:
+score_slate._log_hitter_rows writes one row per clean hitter-game to
+cache/hitter_row_log.csv: identity, lineup slot, every prob_* the slate
+carried, every outcome it can be graded against, and the hot/cold marker so
+it can grade itself here the way the pitcher markers do. Clean rows only,
+same contract as the pitcher log. About 220 rows a slate, ~25 KB a night.
 
-    prior      soft       mid     power
-      150   -0.049K   -0.081K   -0.019K
-      250   -0.204K   -0.083K   +0.146K   <- was live
+Re-scoring a slate REPLACES its rows rather than appending them, matching
+scoring_log and pitcher_row_log. score_slate is safe to re-run by design --
+odds arrive late, boxscores get corrected -- and a log that grew on every
+re-run would silently weight those nights twice, with every calibration
+number drawn from it wrong in a way nothing would flag. test_hitter_log.py
+(14 checks) covers that case specifically, plus empty/None frames and a
+slate missing columns.
 
-250 is not wrong in aggregate -- total bias is flat at -0.06 across the
-whole range -- it is wrong as a TILT, pulling soft arms up and letting
-power arms sag. A 0.35 K spread between arm types at 250; 0.03 K at 150.
+Prompted by asking whether HR belongs anywhere but a LOTTO slip. It does
+not -- tier_of is pure probability and HR clears the 28% MEDIUM cut on 6 of
+1,367 slate rows -- but the premise that HR is a coin flip was false and
+came from a V2 TRAINING result (AUC 0.51-0.54) that the per-PA rate engine
+superseded. Graded live, prob_hr has the HIGHEST AUC of any hitter prop:
+0.625 mean per slate over 16 slates, sd 0.067, z = +7.5, above 0.500 on 15
+of 16, calibrated at said 11.52% / happened 11.50%. CONTEXT.md now carries
+a correction above the stale bullet.
 
-Soft arms are exactly the pitchers carrying 2.5 and 3.5 lines, where the
-calibration curve has the model saying 73.8% and the thing happening
-60.3%. Priced through k_count_distribution, the 0.204 K is worth about 3
-points of probability at a 3.5 line -- the first located component of that
-gap.
+To backfill: re-run score_slate.py for past dates. All three logs replace
+by date, so it is safe.
 
-lab_shrinkage.py's RMSE sweep also moved its optimum from 250 to 150, but
-only by 0.04%, so RMSE is not the argument. Bias balance is.
-
-A residual ~-0.08 K over-projection sits on the mid group at every value
-of this constant. Lowering it does not touch that, and it is still
-unexplained.
-
-2. The velocity marker now affects the projection, not just the display
-
-It was computed by pitcher_form.py AFTER predict_slate ran -- the marker
-read the file the projection wrote -- so the dashboard displayed it beside
-a number it had not been allowed to affect.
-
-pitcher_form.velocity_for() now returns the marker for a set of pitcher
-ids straight from the statcast caches, and predict_slate calls it before
-projecting. run_slate's step order is unchanged and pitcher_form.main()
-is untouched, so the dashboard file is still written exactly as before.
-
-The slope is re-measured in the exact form it ships, which is NOT the
-number lab_pitcher_form.py prints:
-
-    lab, expanding baseline, uncapped          +0.0114 per sd
-    12-month baseline (what k_rate uses)       +0.0106 per sd
-    12-month baseline, production window defn  +0.0093 per sd   <- shipped
-
-Both corrections matter. k_rate is a trailing-12-month rate and has
-already absorbed part of a recent decline, so the expanding-baseline slope
-would count it twice; and pitcher_form excludes the recent window from its
-own baseline where the lab does not. Shipping a slope measured on one
-definition while feeding it a feature built on another is the mismatch
-this project keeps catching. n = 9,846, r = +0.0752, p = 8e-14.
-
-Clamped at +/-2 sd: 4.9% of starts reach it, and at the clamp the
-adjustment is about 0.43 K over 23 batters. It moves the RATE only --
-velocity does not predict how long a pitcher lasts (r = +0.008, p = 0.41)
--- so the batters-faced distribution is untouched. A pitcher with too
-little velocity history comes back present and "Unknown" with a NaN z, and
-apply_velocity passes his rate through unchanged.
-
-The adjustment lives in pitcher_form.py beside the feature it scales, so
-the constant sits next to the thing it was measured on and a test can
-import it without the slate pipeline.
-
-Tests: test_velocity.py 16/16 (new), test_workload.py 32/32,
-test_relief_tier.py, test_slips.py, check.py 6/6.
-
-Row log: record the rate the projection actually used
-
-`expected_k` and `k_dist` are built from the velocity-adjusted rate, but
-the row was writing `workload.k_rate(pid)` -- the unadjusted one. Two
-numbers side by side that do not multiply out, and `k_rate` is the field
-the calibration work reads to attribute a miss.
-
-`k_rate` is now the rate used. `k_rate_base` (pre-adjustment) and
-`velo_z_used` are logged alongside it, and both are added to
-score_slate's keep list. K_PRIOR_BF and velocity went live the same
-night; without those two columns neither could ever be graded alone.
-
-Runbook is unchanged: run_slate's six steps run in the same order with the
-same commands. predict_slate imports pitcher_form as a module rather than
-reading a file it writes, so there is no new ordering requirement, and
-pitcher_form.main() still runs at step 3 and writes the dashboard file
-exactly as before.
-
-Strikeout-form marker: a Form column beside Velo
-
-Velocity measures how hard a pitcher is throwing. It does not measure how
-he has been DOING, and the two disagree most of the time -- on 8 sampled
-pitchers they gave different verdicts on 6. Landen Roupp on 2026-09-15 read
-velocity Normal (z = -0.21) while his last four starts sat 11 K in 89
-batters against his own 21.8%, a strikeout-form z of -2.15. The velocity
-marker had nothing to say about him.
-
-pitcher_form.py now computes kform_z/kform_state on the same shape as the
-velocity marker -- full cache, baseline excluding the recent window -- and
-writes them into pitchers_{date}.csv. dashboard.py shows a Form column next
-to Velo, coloured at the measured cut. score_slate keeps the four columns so
-the marker can grade itself against the outcome.
-
-DISPLAY ONLY, and it must stay that way. Recent K rate is real
-(r = +0.0335, z = +3.54 over 11,148 starts) but does NOT survive next to
-velocity: the two correlate at +0.19 and fitted jointly recent form falls to
-z = +1.91 while velocity is untouched. Feeding both would count most of the
-same signal twice.
-
-Window 4 starts, cut 1.25 sigma, both measured. Over ~10,500 starts,
-de-meaned within pitcher, flagged-Hot beats flagged-Cold by 1.8 points of
-strikeout rate on the NEXT start (z = +5.13), firing on 30% of rows. The
-window/cut cells tested are inside each other's error bars, so this is not a
-claim that 4/1.25 beats 3/1.50 -- four starts is ~90 batters rather than
-~70, and it is the stretch a person actually eyeballs.
-
-The first version of that measurement reported +4.5% at z = +12.67 and was
-wrong: `z` is computed against his baseline and the outcome was measured
-against the SAME baseline, so baseline noise pushed both the same way.
-De-meaning within pitcher removes it and the effect drops by a factor of
-three. Same shared-denominator trap as the order-penalty lab.
-
-Also: Form and Velo are now dropped from the table when a slate predates
-them, instead of rendering as an empty column.
+Tests: test_hitter_log.py 14/14 (new), test_velocity.py, test_workload.py,
+test_slips.py, test_relief_tier.py, check.py 6/6 + clock.

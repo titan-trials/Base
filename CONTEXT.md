@@ -2188,6 +2188,23 @@ true, and it was the justification for the whole file.
     the effect by a factor of three. Same shared-denominator trap as the
     order-penalty lab.
 
+### V12.6 ✅ (Sep 15, 2026) — hitter row log
+  `scoring_log.csv` keeps per-slate aggregates only, so band-level
+  calibration — the thing that caught the strikeout over-confidence — could
+  not be done for hitters at all. `score_slate._log_hitter_rows` now writes
+  one row per clean hitter-game to `cache/hitter_row_log.csv`: every
+  `prob_*` the slate carried, every outcome, lineup slot, and the hot/cold
+  marker. ~220 rows a slate, ~25 KB. Re-scoring REPLACES a date rather than
+  appending it, matching the other two logs; `test_hitter_log.py` (14
+  checks) guards that specifically. Backfill by re-running `score_slate.py`
+  on past dates.
+  Also corrected: **HR is not a coin flip.** That belief came from a V2
+  training result; graded live it is the best-ordered hitter prop on the
+  board (AUC 0.625, z = +7.5, 16 slates, said 11.52% / happened 11.50%). It
+  still belongs only on LOTTO slips — `tier_of` is pure probability and HR
+  clears the 28% MEDIUM cut on 6 of 1,367 rows — but because it is a long
+  shot, not a bad bet.
+
 ### WATCH — both changes are live and neither has been graded
   Every pitcher on the board moves tonight. `pitcher_row_log.csv` records
   `k_rate` and the `velo_*` fields per start, so the two are separable

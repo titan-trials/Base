@@ -273,6 +273,81 @@ OUTS_LINES = (14.5, 15.5, 16.5, 17.5, 18.5)
 K_MODEL_CHANGED = "2026-09-05"
 
 
+HITTER_ROW_LOG = "hitter_row_log"
+
+
+def _log_hitter_rows(basis: pd.DataFrame, game_date: str):
+    """
+    One row per clean hitter-game, appended to cache/hitter_row_log.csv.
+
+    WHY THIS EXISTS
+    ---------------
+    `scoring_log.csv` keeps one row per PROP per slate -- n, base_rate,
+    mean_pred, auc, brier. That is enough to say whether a prop works and
+    nothing else. It cannot answer "is the model calibrated at the TOP of
+    its range", because by the time a slate is summarised every individual
+    probability has been averaged away.
+
+    That is exactly the question that mattered on the pitcher side. The
+    strikeout props were fine in aggregate and 13.5 points hot in the
+    65-80% band, and the only reason anyone could see it is that
+    `pitcher_row_log.csv` stores the per-start distribution. The hitter
+    side had no equivalent, so the same failure would have been invisible:
+    a prop can read said 11.5% / happened 11.5% across 3,538 rows while the
+    handful of rows above 30% -- the ones a LOTTO leg is actually picked
+    from -- run badly hot.
+
+    Prompted by Nolan asking whether HR belongs anywhere but a LOTTO slip.
+    HR turned out to be the best-ordered prop on the board (AUC 0.625,
+    z = +7.5 over 16 slates), and the honest answer to "but is the top of
+    its range calibrated" was that the data to check had never been kept.
+
+    CLEAN ROWS ONLY, like the pitcher log, for the same reason: a
+    prediction written after first pitch is not a forecast, and a file
+    meant for slicing must not need a caveat column to be read safely.
+
+    SIZE
+    ----
+    About 220 rows a slate at ~20 columns, so roughly 25 KB a night --
+    the same bargain pitchers_{date}.csv already makes. Predictions and
+    outcomes only; no distributions, because a hitter prop is a single
+    probability rather than a 30-point PMF.
+    """
+    if basis is None or basis.empty:
+        return
+    keep = ["player", "player_id", "team", "opponent", "lineup_slot",
+            "opposing_pitcher_id", "platoon_edge",
+            # every prediction the slate carried...
+            ] + sorted(c for c in basis.columns if c.startswith("prob_")) + [
+            # ...and every outcome it can be graded against.
+            "got_hr", "got_hit", "got_walk", "hrr", "total_bases", "hits",
+            "pa", "at_bats",
+            # The hitter hot/cold marker, so it can grade itself here the
+            # way the pitcher markers do in pitcher_row_log.
+            "bat_state", "bat_z"]
+    have = [c for c in dict.fromkeys(keep) if c in basis.columns]
+    if not have:
+        return
+    rows = basis[have].copy()
+    rows.insert(0, "game_date", game_date)
+
+    path = cache_path(HITTER_ROW_LOG)
+    if os.path.exists(path):
+        try:
+            old = pd.read_csv(path)
+            # Re-scoring a slate replaces its rows rather than doubling
+            # them. score_slate is safe to re-run by design and a log that
+            # grew on every re-run would quietly weight those nights twice.
+            if "game_date" in old.columns:
+                old = old[old["game_date"].astype(str) != str(game_date)]
+            rows = pd.concat([old, rows], ignore_index=True)
+        except Exception:
+            pass
+    rows.to_csv(path, index=False)
+    print(f"  Row log: {len(basis)} hitter row(s) -> "
+          f"{HITTER_ROW_LOG}.csv ({len(rows)} total)")
+
+
 def _log_pitcher_rows(basis: pd.DataFrame, game_date: str):
     """
     One row per clean starter, appended to cache/pitcher_row_log.csv.
@@ -1066,6 +1141,7 @@ def main(game_date: str = None):
     # one or two early games simply produces no clean table rather than a
     # meaningless one computed from 14 hitters.
     clean_frame = merged[merged[CLEAN_COL]] if CLEAN_COL in merged else merged.iloc[0:0]
+    _log_hitter_rows(clean_frame, game_date)
     rows_clean = score_frame(clean_frame) if len(clean_frame) >= 30 else []
     table_clean = (pd.DataFrame(rows_clean)[COLS] if rows_clean
                    else pd.DataFrame(columns=COLS))
