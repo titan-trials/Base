@@ -157,6 +157,26 @@ for _t, key in (("SAFE", "p"), ("MEDIUM", None), ("LOTTO", None)):
         bad_tier += int((g["p"] >= S.LOTTO_MAX).sum())
     else:
         bad_tier += int(((g["p"] < S.LOTTO_MAX) | (g["p"] >= S.SAFE_MIN)).sum())
+# MIXED is built from MIXED_RECIPE, not from TIERS, and the two are easy to
+# confuse -- TIERS also drives the three pure slips, so editing it to change
+# MIXED would silently stop LOTTO slips being built. This pins the recipe.
+#
+# It went SAFE + MEDIUM + LOTTO until 2026-09-16 and was 0-for-8 at a mean
+# 4.3%, dying on the long shot while landing most of its other legs. Two
+# MEDIUM legs replaced the LOTTO one.
+_mx = out[out["tier"] == "MIXED"]
+_hit_legs = _mx[_mx["kind"] != "arm"] if "kind" in _mx.columns else _mx
+_recipe = [t for t, _ in S.MIXED_RECIPE]
+_bad = 0
+for _w, _g in _hit_legs.groupby("window"):
+    _got = sorted(_g["p"].map(S.tier_of))
+    # A window can be short of a tier; it must never hold one the recipe
+    # does not ask for.
+    if any(_got.count(_t) > _recipe.count(_t) for _t in set(_got)):
+        _bad += 1
+check("MIXED holds no tier its recipe does not ask for", _bad, 0)
+check("MIXED recipe has no LOTTO leg", "LOTTO" in _recipe, False)
+
 check("every pure-tier leg is inside its cut points", bad_tier, 0)
 
 print(f"\n  {len(per)} slips, {len(out)} legs, "

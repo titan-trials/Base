@@ -95,6 +95,28 @@ WINDOW_GAP = pd.Timedelta(minutes=30)
 # just re-sorts by which prop has the higher base rate, which is a fact
 # about the prop and not about the player.
 TIERS = [("SAFE", "p"), ("MEDIUM", "lift"), ("LOTTO", "lift")]
+
+# MIXED gets its OWN recipe rather than reusing TIERS, which also drives the
+# three pure slips -- changing that tuple would silently stop LOTTO slips
+# being built at all.
+#
+# It used to be one leg per tier, SAFE + MEDIUM + LOTTO, described as "the
+# slip a long shot rides along in". Graded over 8 committed slips it went
+# 0-for-8 at a mean probability of 4.3%, and the leg counts say why: 2/4,
+# 2/4, 1/3, 1/3, 2/4, 2/3, 2/3, 2/4. It kept landing most of itself and
+# dying on the long shot. On the 2026-09-13 slate the LOTTO leg was a 19%
+# home run once and a 7-9% Hits 2.5 three times.
+#
+# Two MEDIUM legs instead of MEDIUM + LOTTO takes the mean from 3.66% to
+# 10.46% on that slate -- one hit every 10 windows instead of every 27.
+#
+# NOT two SAFE legs, which was the other candidate and scores better on
+# paper at 18.6%: it shares 2.2 legs per window with that window's own SAFE
+# slip, so on 9/13 two of the five windows were the SAFE slip with a single
+# leg swapped. A ticket that is another ticket at half the probability is
+# not a second option. Two MEDIUM legs share 1.6, and they are visibly
+# different legs -- walks and total bases rather than a second H+R+RBI 0.5.
+MIXED_RECIPE = [("SAFE", "p"), ("MEDIUM", "lift"), ("MEDIUM", "lift")]
 TIER_ORDER = ["MIXED", "SAFE", "MEDIUM", "LOTTO"]
 
 
@@ -264,7 +286,14 @@ def _pick(pool, arms, by, n):
 
 
 def _mixed(group, arms):
-    """One leg per tier, plus an arm. The slip a long shot rides along in."""
+    """
+    A safe leg, two medium ones and an arm.
+
+    `used_n` already forbids repeating a PLAYER, so the two MEDIUM legs are
+    always different men -- which matters more here than anywhere else,
+    because drawing twice from one tier is exactly where a slip could
+    otherwise pick the same hitter's two overlapping props.
+    """
     used_g, used_n, out = set(), set(), []
     if arms is not None and not arms.empty:
         a = arms.reindex(arms["edge"].astype(float).abs()
@@ -272,7 +301,7 @@ def _mixed(group, arms):
         out.append({"row": a, "clash": False})
         used_g.add(a["game_pk"])
         used_n.add(a["name"])
-    for tname, by in TIERS:
+    for tname, by in MIXED_RECIPE:
         pool = group[(group["tier"] == tname) & (~group["name"].isin(used_n))]
         if pool.empty:
             continue
