@@ -28,3 +28,9 @@ window,tier,n_legs,n_graded,slip_p,legs_hit,hit,n_games,solo,correlated,legs,gam
 2,MEDIUM,3,3,0.1067350762875484,1.0,0.0,2,False,True,J.P. Crawford Walk + Lars Nootbaar Walk + Mike Trout Walk,2026-09-14
 2,MIXED,3,3,0.0620654698390792,2.0,0.0,2,False,True,Mike Trout H+R+RBI 0.5 + Lars Nootbaar Walk + Cal Raleigh HR,2026-09-14
 2,SAFE,3,3,0.3627862351038067,3.0,1.0,2,False,True,Mike Trout H+R+RBI 0.5 + Ketel Marte H+R+RBI 0.5 + Randy Arozarena H+R+RBI 0.5,2026-09-14
+0,LOTTO,3,3,0.0087463976286309,2.0,0.0,13,False,False,Fernando Tatis Jr. Hits 2.5 + Pete Alonso HR + Kyle Schwarber HR,2026-09-15
+0,MEDIUM,3,3,0.0492750951144304,2.0,0.0,13,False,False,Drew Anderson Under 3.5 K + Pete Alonso TB 3.5 + Fernando Tatis Jr. TB 2.5,2026-09-15
+0,MIXED,4,4,0.059555604044929,2.0,0.0,13,False,False,Sean Manaea Under 6.5 K + Fernando Tatis Jr. H+R+RBI 0.5 + Bryce Harper Walk + Ben Rice HR,2026-09-15
+0,SAFE,3,3,0.3667383608158288,3.0,1.0,13,False,False,Sean Manaea Under 6.5 K + Fernando Tatis Jr. H+R+RBI 0.5 + Freddie Freeman H+R+RBI 0.5,2026-09-15
+1,MEDIUM,3,3,0.0852102637975441,2.0,0.0,2,False,True,Cal Raleigh HR + Jakob Marsee Walk + J.P. Crawford Walk,2026-09-15
+1,SAFE,3,3,0.3908904369941594,1.0,0.0,2,False,True,Ketel Marte H+R+RBI 0.5 + Cal Raleigh H+R+RBI 0.5 + Lars Nootbaar H+R+RBI 0.5,2026-09-15
