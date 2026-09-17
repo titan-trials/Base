@@ -5269,3 +5269,33 @@ game_pk,game_date,team,opponent,is_home,runs,runs_allowed
 823980,2026-09-15,Seattle Mariners,Los Angeles Angels,0,1,2
 825030,2026-09-15,Arizona Diamondbacks,Miami Marlins,1,2,4
 825030,2026-09-15,Miami Marlins,Arizona Diamondbacks,0,4,2
+824382,2026-09-16,Cleveland Guardians,Chicago White Sox,1,6,3
+824382,2026-09-16,Chicago White Sox,Cleveland Guardians,0,3,6
+823004,2026-09-16,St. Louis Cardinals,San Francisco Giants,1,5,6
+823004,2026-09-16,San Francisco Giants,St. Louis Cardinals,0,6,5
+823655,2026-09-16,Minnesota Twins,New York Yankees,1,5,4
+823655,2026-09-16,New York Yankees,Minnesota Twins,0,4,5
+822763,2026-09-16,Toronto Blue Jays,Detroit Tigers,1,5,1
+822763,2026-09-16,Detroit Tigers,Toronto Blue Jays,0,1,5
+824467,2026-09-16,Cincinnati Reds,Los Angeles Dodgers,1,6,2
+824467,2026-09-16,Los Angeles Dodgers,Cincinnati Reds,0,2,6
+822926,2026-09-16,Tampa Bay Rays,Athletics,1,4,3
+822926,2026-09-16,Athletics,Tampa Bay Rays,0,3,4
+823332,2026-09-16,Pittsburgh Pirates,Milwaukee Brewers,1,4,5
+823332,2026-09-16,Milwaukee Brewers,Pittsburgh Pirates,0,5,4
+822680,2026-09-16,Washington Nationals,Philadelphia Phillies,1,0,3
+822680,2026-09-16,Philadelphia Phillies,Washington Nationals,0,3,0
+823576,2026-09-16,New York Mets,Baltimore Orioles,1,1,7
+823576,2026-09-16,Baltimore Orioles,New York Mets,0,7,1
+824626,2026-09-16,Chicago Cubs,Atlanta Braves,1,8,4
+824626,2026-09-16,Atlanta Braves,Chicago Cubs,0,4,8
+822846,2026-09-16,Texas Rangers,Boston Red Sox,1,7,3
+822846,2026-09-16,Boston Red Sox,Texas Rangers,0,3,7
+824140,2026-09-16,Houston Astros,Kansas City Royals,1,2,5
+824140,2026-09-16,Kansas City Royals,Houston Astros,0,5,2
+824306,2026-09-16,Colorado Rockies,San Diego Padres,1,3,9
+824306,2026-09-16,San Diego Padres,Colorado Rockies,0,9,3
+823979,2026-09-16,Los Angeles Angels,Seattle Mariners,1,2,7
+823979,2026-09-16,Seattle Mariners,Los Angeles Angels,0,7,2
+825031,2026-09-16,Arizona Diamondbacks,Miami Marlins,1,3,4
+825031,2026-09-16,Miami Marlins,Arizona Diamondbacks,0,4,3

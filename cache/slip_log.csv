@@ -34,3 +34,19 @@ window,tier,n_legs,n_graded,slip_p,legs_hit,hit,n_games,solo,correlated,legs,gam
 0,SAFE,3,3,0.3667383608158288,3.0,1.0,13,False,False,Sean Manaea Under 6.5 K + Fernando Tatis Jr. H+R+RBI 0.5 + Freddie Freeman H+R+RBI 0.5,2026-09-15
 1,MEDIUM,3,3,0.0852102637975441,2.0,0.0,2,False,True,Cal Raleigh HR + Jakob Marsee Walk + J.P. Crawford Walk,2026-09-15
 1,SAFE,3,3,0.3908904369941594,1.0,0.0,2,False,True,Ketel Marte H+R+RBI 0.5 + Cal Raleigh H+R+RBI 0.5 + Lars Nootbaar H+R+RBI 0.5,2026-09-15
+0,LOTTO,3,3,0.0019700312492991,0.0,0.0,3,False,False,Ben Rice HR + Alec Burleson Hits 2.5 + Randal Grichuk Hits 2.5,2026-09-16
+0,MEDIUM,3,3,0.0529589027265274,1.0,0.0,3,False,False,Parker Messick Over 6.5 K + Aaron Judge HR + Alec Burleson Hits 1.5,2026-09-16
+0,MIXED,4,4,0.0409672955268919,1.0,0.0,3,False,True,Parker Messick Over 6.5 K + Aaron Judge H+R+RBI 0.5 + Alec Burleson Hits 1.5 + Ben Rice TB 3.5,2026-09-16
+0,SAFE,3,3,0.4058892699405425,2.0,0.0,3,False,False,Aaron Judge H+R+RBI 0.5 + Leo Bernal H+R+RBI 0.5 + Randal Grichuk H+R+RBI 0.5,2026-09-16
+1,LOTTO,3,3,0.0026750648580974,0.0,0.0,1,True,True,Brett Bateman Hits 2.5 + Kazuma Okamoto HR + Riley Greene HR,2026-09-16
+1,MEDIUM,3,3,0.0576533600964839,1.0,0.0,1,True,True,Kevin McGonigle Walk + Brett Bateman Hits 1.5 + Josh Smith Walk,2026-09-16
+1,MIXED,4,4,0.0889172533765707,2.0,0.0,1,True,True,Max Scherzer Under 4.5 K + Brett Bateman H+R+RBI 0.5 + Kevin McGonigle Walk + Josh Smith Walk,2026-09-16
+1,SAFE,3,3,0.3360110969909087,3.0,1.0,1,True,True,Max Scherzer Under 4.5 K + Brett Bateman H+R+RBI 0.5 + Kevin McGonigle H+R+RBI 0.5,2026-09-16
+2,LOTTO,3,3,0.0032153852416961,0.0,0.0,9,False,False,Yandy Díaz Hits 2.5 + Kyle Schwarber HR + Fernando Tatis Jr. Hits 2.5,2026-09-16
+2,MEDIUM,3,3,0.1705576789534311,3.0,1.0,9,False,False,Blake Snell Under 7.5 K + Jake Bauers Walk + Michael Busch Walk,2026-09-16
+2,MIXED,4,4,0.1542738857337139,4.0,1.0,9,False,False,Cristian Javier Under 4.5 K + Fernando Tatis Jr. H+R+RBI 0.5 + Jake Bauers Walk + Michael Busch Walk,2026-09-16
+2,SAFE,3,3,0.3693329877720253,2.0,0.0,9,False,False,Cristian Javier Under 4.5 K + Fernando Tatis Jr. H+R+RBI 0.5 + Yandy Díaz Hit,2026-09-16
+3,LOTTO,3,3,0.0013652347583784,0.0,0.0,2,False,True,Cal Raleigh HR + Ketel Marte Hits 2.5 + Otto Lopez Hits 2.5,2026-09-16
+3,MEDIUM,3,3,0.1268479232707824,2.0,0.0,2,False,True,Yusei Kikuchi Under 5.5 K + Geraldo Perdomo Walk + J.P. Crawford Walk,2026-09-16
+3,MIXED,4,4,0.1006331269806572,2.0,0.0,2,False,True,George Kirby Over 5.5 K + Ketel Marte H+R+RBI 0.5 + Geraldo Perdomo Walk + J.P. Crawford Walk,2026-09-16
+3,SAFE,3,3,0.3184433669290588,2.0,0.0,2,False,True,George Kirby Over 5.5 K + Ketel Marte H+R+RBI 0.5 + Randy Arozarena H+R+RBI 0.5,2026-09-16

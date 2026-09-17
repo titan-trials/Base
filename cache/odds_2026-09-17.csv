@@ -1,0 +1,19 @@
+market,player,line,prob_over,hold,n_books,commence_time,home_team,away_team,game_date,fetched_at_utc
+pitcher_strikeouts,Wilber Dotel,1.5,0.53514579518242,0.05971040453799081,1,2026-09-17T16:36:00Z,Pittsburgh Pirates,Milwaukee Brewers,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Brady Singer,3.5,0.5816186021040377,0.06633139242578368,2,2026-09-17T16:41:00Z,Cincinnati Reds,Los Angeles Dodgers,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Justin Wrobleski,3.5,0.5307325850020738,0.06562332122030823,4,2026-09-17T16:41:00Z,Cincinnati Reds,Los Angeles Dodgers,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Tanner Gordon,3.5,0.5045238901653748,0.0661837285060034,6,2026-09-17T19:10:00Z,Colorado Rockies,San Diego Padres,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Erick Fedde,3.5,0.45390730179858874,0.06430612200180441,6,2026-09-17T23:41:00Z,Chicago White Sox,Detroit Tigers,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Jeffrey Springs,3.5,0.4329079304986734,0.06671996164851313,6,2026-09-17T17:10:00Z,Tampa Bay Rays,Athletics,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Walbert Urena,4.5,0.5636760294518679,0.0650148089287006,5,2026-09-18T01:39:00Z,Los Angeles Angels,Minnesota Twins,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Framber Valdez,4.5,0.4807826827836915,0.06642230249301184,6,2026-09-17T23:41:00Z,Chicago White Sox,Detroit Tigers,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Brady Singer,4.5,0.44532204478141746,0.06729711673391281,4,2026-09-17T16:41:00Z,Cincinnati Reds,Los Angeles Dodgers,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Michael King,4.5,0.4371033335844817,0.06431306621836186,6,2026-09-17T19:10:00Z,Colorado Rockies,San Diego Padres,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Seth Lugo,4.5,0.4074268549376503,0.06485905640825174,6,2026-09-17T23:17:00Z,Houston Astros,Kansas City Royals,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Drew Rasmussen,5.5,0.5478134303383551,0.0669293411587425,6,2026-09-17T17:10:00Z,Tampa Bay Rays,Athletics,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Sonny Gray,5.5,0.48747331224699975,0.06621799609604484,6,2026-09-18T00:06:00Z,Texas Rangers,Boston Red Sox,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Nolan McLean,5.5,0.4615571937910296,0.06435667811909451,6,2026-09-17T23:16:00Z,New York Mets,Philadelphia Phillies,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Kyle Harrison,5.5,0.44019251445164564,0.06531040088991569,6,2026-09-17T16:36:00Z,Pittsburgh Pirates,Milwaukee Brewers,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Aaron Nola,5.5,0.4300175402180204,0.0669252622377623,6,2026-09-17T23:16:00Z,New York Mets,Philadelphia Phillies,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Walbert Urena,5.5,0.4059040590405904,0.07114624505928857,1,2026-09-18T01:39:00Z,Los Angeles Angels,Minnesota Twins,2026-09-17,2026-09-17T16:07:57Z
+pitcher_strikeouts,Taj Bradley,6.5,0.541784417702891,0.06347040280039185,6,2026-09-18T01:39:00Z,Los Angeles Angels,Minnesota Twins,2026-09-17,2026-09-17T16:07:57Z
