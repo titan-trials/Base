@@ -50,3 +50,17 @@ window,tier,n_legs,n_graded,slip_p,legs_hit,hit,n_games,solo,correlated,legs,gam
 3,MEDIUM,3,3,0.1268479232707824,2.0,0.0,2,False,True,Yusei Kikuchi Under 5.5 K + Geraldo Perdomo Walk + J.P. Crawford Walk,2026-09-16
 3,MIXED,4,4,0.1006331269806572,2.0,0.0,2,False,True,George Kirby Over 5.5 K + Ketel Marte H+R+RBI 0.5 + Geraldo Perdomo Walk + J.P. Crawford Walk,2026-09-16
 3,SAFE,3,3,0.3184433669290588,2.0,0.0,2,False,True,George Kirby Over 5.5 K + Ketel Marte H+R+RBI 0.5 + Randy Arozarena H+R+RBI 0.5,2026-09-16
+0,LOTTO,3,3,0.0023754480462748,0.0,0.0,3,False,False,Junior Caminero HR + Freddie Freeman Hits 2.5 + Jackson Chourio Hits 2.5,2026-09-17
+0,MEDIUM,3,3,0.0757567257817985,3.0,1.0,3,False,False,Drew Rasmussen Under 5.5 K + Freddie Freeman Hits 1.5 + Brice Turang Walk,2026-09-17
+0,MIXED,4,4,0.0732366266538073,2.0,0.0,3,False,True,Kyle Harrison Over 5.5 K + Freddie Freeman H+R+RBI 0.5 + Junior Caminero TB 2.5 + Max Muncy Walk,2026-09-17
+0,SAFE,3,3,0.3342866944407108,2.0,0.0,3,False,False,Kyle Harrison Over 5.5 K + Freddie Freeman H+R+RBI 0.5 + Junior Caminero H+R+RBI 0.5,2026-09-17
+1,LOTTO,3,3,0.001799878244515,2.0,0.0,1,True,True,Fernando Tatis Jr. Hits 2.5 + Ty France Hits 2.5 + Dustin Harris Hits 2.5,2026-09-17
+1,MEDIUM,3,3,0.0497918980244878,2.0,0.0,1,True,True,Fernando Tatis Jr. Hits 1.5 + Jackson Merrill TB 2.5 + Ty France Hits 1.5,2026-09-17
+1,MIXED,3,3,0.0978830480199346,3.0,1.0,1,True,True,Fernando Tatis Jr. H+R+RBI 0.5 + Jackson Merrill TB 2.5 + Ty France Hits 1.5,2026-09-17
+1,SAFE,3,3,0.4588572690232723,3.0,1.0,1,True,True,Fernando Tatis Jr. H+R+RBI 0.5 + Manny Machado H+R+RBI 0.5 + Jackson Merrill H+R+RBI 0.5,2026-09-17
+2,LOTTO,3,3,0.0113682042811756,1.0,0.0,4,False,False,Kyle Schwarber HR + Yordan Alvarez HR + Corey Seager HR,2026-09-17
+2,MEDIUM,3,3,0.0919896330505517,2.0,0.0,4,False,False,Nolan McLean Over 5.5 K + Kevin McGonigle Walk + Yordan Alvarez TB 2.5,2026-09-17
+2,MIXED,4,4,0.0994228597559755,3.0,0.0,4,False,False,Nolan McLean Over 5.5 K + Yordan Alvarez H+R+RBI 0.5 + Kevin McGonigle Walk + Willson Contreras Walk,2026-09-17
+2,SAFE,3,3,0.3435541400869559,1.0,0.0,4,False,False,Seth Lugo Under 4.5 K + Luis Arraez Hit + Kevin McGonigle H+R+RBI 0.5,2026-09-17
+3,LOTTO,3,3,0.0039985015706211,0.0,0.0,1,True,True,Mike Trout HR + Zach Neto HR + Kody Clemens HR,2026-09-17
+3,SAFE,3,3,0.3364410813157698,3.0,1.0,1,True,True,Taj Bradley Over 6.5 K + Mike Trout H+R+RBI 0.5 + Zach Neto H+R+RBI 0.5,2026-09-17
