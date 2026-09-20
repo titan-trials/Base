@@ -1,0 +1,17 @@
+market,player,line,prob_over,hold,n_books,commence_time,home_team,away_team,game_date,fetched_at_utc
+pitcher_strikeouts,Jake Irvin,3.5,0.5020774472328402,0.06101216716628466,1,2026-09-20T18:16:00Z,St. Louis Cardinals,Washington Nationals,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Davis Martin,3.5,0.4979225527671597,0.06101216716628466,1,2026-09-20T18:11:00Z,Chicago White Sox,Detroit Tigers,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Martin Perez,3.5,0.4669102720259846,0.06026689625484272,1,2026-09-20T18:11:00Z,Houston Astros,Atlanta Braves,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Griffin Jax,4.5,0.5467012037178121,0.06060116354234002,1,2026-09-20T17:40:00Z,Tampa Bay Rays,Boston Red Sox,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Troy Melton,4.5,0.5145711906744379,0.06001765225066191,1,2026-09-20T18:11:00Z,Chicago White Sox,Detroit Tigers,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Will Warren,4.5,0.5145711906744379,0.06001765225066191,1,2026-09-20T20:11:00Z,Arizona Diamondbacks,New York Yankees,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Corbin Burnes,4.5,0.48124062031015497,0.059353471118177126,1,2026-09-20T20:11:00Z,Arizona Diamondbacks,New York Yankees,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Jonah Tong,4.5,0.4423019176920884,0.05980150495446512,2,2026-09-20T17:11:00Z,New York Mets,Philadelphia Phillies,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Patrick Sandoval,4.5,0.4344048653344918,0.060829493087557474,1,2026-09-20T17:40:00Z,Tampa Bay Rays,Boston Red Sox,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Brandon Young,4.5,0.43327556325823224,0.05871559633027523,1,2026-09-20T23:21:00Z,Baltimore Orioles,Milwaukee Brewers,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Jack Perkins,4.5,0.408486769906109,0.059766104542223975,1,2026-09-20T17:41:00Z,Cleveland Guardians,Athletics,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Quinn Mathews,5.5,0.528066528066528,0.05947136563876665,1,2026-09-20T18:16:00Z,St. Louis Cardinals,Washington Nationals,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Gavin Williams,6.5,0.5823064366418077,0.05933611365408753,1,2026-09-20T17:41:00Z,Cleveland Guardians,Athletics,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Hunter Brown,6.5,0.42847503373819157,0.060844667143879816,1,2026-09-20T18:11:00Z,Houston Astros,Atlanta Braves,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Cristopher Sanchez,6.5,0.39255306391653677,0.059778553297424764,2,2026-09-20T17:11:00Z,New York Mets,Philadelphia Phillies,2026-09-20,2026-09-20T03:33:54Z
+pitcher_strikeouts,Jacob Misiorowski,7.5,0.5936183022275737,0.06066411238825031,1,2026-09-20T23:21:00Z,Baltimore Orioles,Milwaukee Brewers,2026-09-20,2026-09-20T03:33:54Z
