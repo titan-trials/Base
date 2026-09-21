@@ -64,3 +64,16 @@ window,tier,n_legs,n_graded,slip_p,legs_hit,hit,n_games,solo,correlated,legs,gam
 2,SAFE,3,3,0.3435541400869559,1.0,0.0,4,False,False,Seth Lugo Under 4.5 K + Luis Arraez Hit + Kevin McGonigle H+R+RBI 0.5,2026-09-17
 3,LOTTO,3,3,0.0039985015706211,0.0,0.0,1,True,True,Mike Trout HR + Zach Neto HR + Kody Clemens HR,2026-09-17
 3,SAFE,3,3,0.3364410813157698,3.0,1.0,1,True,True,Taj Bradley Over 6.5 K + Mike Trout H+R+RBI 0.5 + Zach Neto H+R+RBI 0.5,2026-09-17
+0,LOTTO,3,3,0.0077067263595482,1.0,0.0,9,False,False,Pete Crow-Armstrong HR + Kyle Schwarber HR + Yandy Díaz Hits 2.5,2026-09-20
+0,MEDIUM,3,3,0.042935206262601,2.0,0.0,9,False,False,Pete Crow-Armstrong TB 3.5 + Kyle Schwarber TB 3.5 + Isaac Paredes Walk,2026-09-20
+0,MIXED,3,3,0.1079456112236892,2.0,0.0,9,False,False,Pete Crow-Armstrong H+R+RBI 0.5 + Kyle Schwarber TB 3.5 + Isaac Paredes Walk,2026-09-20
+0,SAFE,3,3,0.4264443941530157,2.0,0.0,9,False,False,Pete Crow-Armstrong H+R+RBI 0.5 + Luis Arraez Hit + Corey Seager H+R+RBI 0.5,2026-09-20
+1,LOTTO,3,3,0.0075623064248418,1.0,0.0,1,True,True,Cal Raleigh HR + Hunter Goodman HR + Julio Rodríguez Hits 2.5,2026-09-20
+1,MEDIUM,3,3,0.0285059135614643,1.0,0.0,1,True,True,Hunter Goodman TB 3.5 + Cal Raleigh TB 3.5 + Julio Rodríguez Hits 1.5,2026-09-20
+1,MIXED,3,3,0.0651839459112117,2.0,0.0,1,True,True,Julio Rodríguez H+R+RBI 0.5 + Hunter Goodman TB 3.5 + Cal Raleigh TB 3.5,2026-09-20
+1,SAFE,3,3,0.4024678939734018,2.0,0.0,1,True,True,Julio Rodríguez H+R+RBI 0.5 + Hunter Goodman H+R+RBI 0.5 + Cal Raleigh H+R+RBI 0.5,2026-09-20
+2,MIXED,3,3,0.1795164403943945,1.0,0.0,4,False,False,Mookie Betts H+R+RBI 0.5 + Jakob Marsee Walk + Lars Nootbaar Walk,2026-09-20
+3,LOTTO,3,3,0.0017834685117492,0.0,0.0,1,True,True,Pete Alonso HR + Jackson Chourio Hits 2.5 + William Contreras Hits 2.5,2026-09-20
+3,MEDIUM,3,3,0.0868554806358661,1.0,0.0,1,True,True,Jake Bauers Walk + Brice Turang Walk + Jackson Chourio Hits 1.5,2026-09-20
+3,MIXED,3,3,0.2012830283867338,2.0,0.0,1,True,True,Jackson Chourio H+R+RBI 0.5 + Jake Bauers Walk + Brice Turang Walk,2026-09-20
+3,SAFE,3,3,0.397776050511493,2.0,0.0,1,True,True,Jackson Chourio H+R+RBI 0.5 + Christian Yelich H+R+RBI 0.5 + William Contreras H+R+RBI 0.5,2026-09-20
