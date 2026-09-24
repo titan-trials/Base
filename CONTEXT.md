@@ -1597,6 +1597,10 @@ python run_slate.py --dry-run          # print the plan, spend nothing
 # To deliberately re-buy a later, stronger line on games already priced:
 python -m data.odds_lines 2026-09-14 --refresh
 
+# The odds step retries connection failures and 5xx (3 tries, <10s) but
+# NEVER retries a timeout -- the request may already have been billed.
+# If it gives up, just run it again: captured games are skipped.
+
 # AFTER the games. Twelve steps; slips are graded as 6-10, reusing the
 # Statcast refresh step 3 already did rather than making a second one.
 python score_slate.py 2026-09-14
@@ -1616,11 +1620,24 @@ python flag_lab.py --origins 3
 
 ### Tests
 
+Nothing here needs the network or a key; all of it runs off the cache or
+synthetic data.
+
 ```powershell
 python test_workload.py       # 32 assertions on the workload model
 python test_relief_tier.py    # the four expected_bf tiers, and that
                               # bf_pmf agrees with expected_bf
 python test_slips.py          # slip building and slip grading
+python test_velocity.py       # 16 checks: a NaN velo_z must not blank a
+                              # projection, and the clamp must bind
+python test_hitter_log.py     # 14 checks, the important one being that
+                              # re-scoring REPLACES a date, never appends
+python test_odds_retry.py     # which HTTP failures may be retried.
+                              # Asserts on urlopen CALL COUNT, because the
+                              # call count is the credit count
+python check.py               # renders every dashboard tab path, 6 cases,
+                              # plus the clock / .gitignore / nested-
+                              # expander guards
 ```
 
 ### Older single-purpose scripts
@@ -1628,7 +1645,9 @@ python test_slips.py          # slip building and slip grading
 ```powershell
 # Activate environment
 .\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m pip install -r requirements.txt   # NOT bare pip -- the venv was
+                                            # moved and pip.exe has the old
+                                            # path compiled in
 
 # Single-player HR baseline (V1)
 python main.py
@@ -1750,7 +1769,9 @@ baseball_predictor/
 ├── debug_schedule.py                # diagnostic used to find the team dropna() bug
 ├── debug_alvarez.py                 # diagnostic used to find the accented-name bug
 ├── requirements.txt
-└── CONTEXT.md                       # this file
+├── README.md                        # how to run it -- start here
+└── CONTEXT.md                       # this file: why every decision is
+                                     # what it is, and what was measured
 ```
 
 ---
@@ -2204,6 +2225,33 @@ true, and it was the justification for the whole file.
   still belongs only on LOTTO slips — `tier_of` is pure probability and HR
   clears the 28% MEDIUM cut on 6 of 1,367 rows — but because it is a long
   shot, not a bad bet.
+
+### V12.7 ✅ (Sep 24, 2026) — retry on the odds fetch, and the asymmetry it turns on
+  A failed odds pull costs a window that cannot be re-bought, so `_get()`
+  — the single HTTP choke point in `data/odds_lines.py` — now retries.
+  Three attempts, exponential backoff from 1.5s with +25% jitter, under
+  10 seconds in the worst case so it cannot itself eat a lock time.
+  **But it retries only the failures that provably cost nothing**, and the
+  reason is that the two mistakes are not symmetric:
+  - **Giving up too early is free.** `already_captured()` reads
+    `odds_{date}.csv` and returns the games already held, so a re-run buys
+    only what is missing. Recoverable at zero cost.
+  - **Retrying too eagerly is unrecoverable.** Player props are billed PER
+    EVENT. If the first request reached the server, the retry is a second
+    charge and nothing gives it back.
+  So: connection refused/reset, DNS failure, network unreachable and 5xx
+  are retried — none of them reached a server that could bill. **Timeouts
+  are NOT**, because twenty seconds of silence is not proof of absence;
+  the API may have served a slow query and charged for it while we stopped
+  listening. A truncated body is not retried either — a half-read answer is
+  proof the server answered. 4xx is never retried: 401 is a bad key, 422
+  bad parameters, and 429 means the quota is gone and asking again makes it
+  worse. Ambiguity falls on the do-not-retry side by construction.
+  `test_odds_retry.py` asserts on the **number of urlopen calls** in every
+  case, because the call count is the credit count. Verified the way the
+  other guards were — by removing the timeout clause first and watching all
+  three timeout cases fail — then restored. No dependency added;
+  `odds_lines` uses `urllib`, so `tenacity` and `requests` were not needed.
 
 ### WATCH — both changes are live and neither has been graded
   Every pitcher on the board moves tonight. `pitcher_row_log.csv` records

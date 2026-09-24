@@ -1,45 +1,57 @@
-Hitter row log, so the hitter props can be audited the way the pitchers are
+Retry the odds fetch, but only on failures that cannot have been billed
 
-cache/scoring_log.csv keeps one row per PROP per slate -- n, base_rate,
-mean_pred, auc, brier. That says whether a prop works and nothing else. It
-cannot answer "is the model calibrated at the TOP of its range", because by
-the time a slate is summarised every individual probability has been
-averaged away.
+A failed odds pull costs a window that cannot be re-bought -- historical
+odds are not on the free tier, so a game not priced before first pitch can
+never be benchmarked by anyone. That argues for retrying. Player props are
+billed PER EVENT against a 500-credit month, which argues for not.
 
-That is exactly the question that mattered on the pitcher side. The
-strikeout props read fine in aggregate and were 13.5 points hot in the
-65-80% band, and the only reason anyone could see it is that
-pitcher_row_log.csv stores the per-start distribution. The hitter side had
-no equivalent, so the same failure would have been invisible: a prop can
-read said 11.5% / happened 11.5% across 3,538 rows while the handful of
-rows above 30% -- the ones a LOTTO leg is actually picked from -- run
-badly hot.
+The two mistakes are not symmetric, and that asymmetry is the whole design:
 
-score_slate._log_hitter_rows writes one row per clean hitter-game to
-cache/hitter_row_log.csv: identity, lineup slot, every prob_* the slate
-carried, every outcome it can be graded against, and the hot/cold marker so
-it can grade itself here the way the pitcher markers do. Clean rows only,
-same contract as the pitcher log. About 220 rows a slate, ~25 KB a night.
+  give up too early   -> already_captured() reads odds_{date}.csv and
+                         returns the games already held, so a re-run buys
+                         only what is missing. Recoverable, free.
 
-Re-scoring a slate REPLACES its rows rather than appending them, matching
-scoring_log and pitcher_row_log. score_slate is safe to re-run by design --
-odds arrive late, boxscores get corrected -- and a log that grew on every
-re-run would silently weight those nights twice, with every calibration
-number drawn from it wrong in a way nothing would flag. test_hitter_log.py
-(14 checks) covers that case specifically, plus empty/None frames and a
-slate missing columns.
+  retry too eagerly   -> the first request may have reached the server and
+                         been billed. The retry is billed again. Nothing
+                         gives that credit back.
 
-Prompted by asking whether HR belongs anywhere but a LOTTO slip. It does
-not -- tier_of is pure probability and HR clears the 28% MEDIUM cut on 6 of
-1,367 slate rows -- but the premise that HR is a coin flip was false and
-came from a V2 TRAINING result (AUC 0.51-0.54) that the per-PA rate engine
-superseded. Graded live, prob_hr has the HIGHEST AUC of any hitter prop:
-0.625 mean per slate over 16 slates, sd 0.067, z = +7.5, above 0.500 on 15
-of 16, calibrated at said 11.52% / happened 11.50%. CONTEXT.md now carries
-a correction above the stale bullet.
+So _get() -- the single HTTP choke point in data/odds_lines.py -- retries
+only what provably never reached a server that could charge for it:
+connection refused, connection reset, DNS failure, network unreachable, and
+5xx the server itself sent. Three attempts, exponential backoff from 1.5s
+with 25% jitter, under 10 seconds worst case so the retry cannot itself eat
+a lock time.
 
-To backfill: re-run score_slate.py for past dates. All three logs replace
-by date, so it is safe.
+Timeouts are NOT retried. Twenty seconds of silence is not proof the
+request never arrived -- the API may have served a slow query and charged
+for it while we stopped listening. A truncated body is not retried either:
+a half-read answer is proof the server answered. 4xx is never retried; 401
+is a bad key, 422 bad parameters, and 429 means the quota is gone and
+asking again makes it worse. Ambiguity falls on the do-not-retry side by
+construction.
 
-Tests: test_hitter_log.py 14/14 (new), test_velocity.py, test_workload.py,
-test_slips.py, test_relief_tier.py, check.py 6/6 + clock.
+No dependency added. odds_lines uses urllib, so the tenacity/requests
+suggestion in improvement_plan.md was not needed -- only `socket` and
+`random`.
+
+test_odds_retry.py (53 checks) asserts on the NUMBER OF URLOPEN CALLS in
+every case, because the call count is the credit count. Nothing touches the
+network; urlopen and time.sleep are replaced. It covers the happy path, the
+five never-retried failures, the eight retried ones, recovery on the second
+and third try, and that the backoff is jittered and bounded. Part 6 asserts
+already_captured is still the thing standing between a re-run and a second
+bill -- if that ever stops skipping, this entire policy is wrong.
+
+Verified the way the .gitignore and nested-expander guards were: the
+timeout clause was removed first and all three timeout cases failed, then
+restored.
+
+Docs: NEW README.md -- setup, the two nightly commands, the credit rules,
+labs, tests, what is tracked in git and why, and a symptom table. CONTEXT.md
+keeps the reasoning; README is how to run it. CONTEXT.md gains the V12.7
+entry, the six newer tests in its Tests block, a retry note on the odds
+step, and a correction to a stale `pip install` line that contradicted
+requirements.txt.
+
+Tests: test_odds_retry.py 53/53 (new), test_slips.py, test_velocity.py,
+test_hitter_log.py, test_workload.py, test_relief_tier.py, check.py 6/6.
