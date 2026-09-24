@@ -77,3 +77,25 @@ window,tier,n_legs,n_graded,slip_p,legs_hit,hit,n_games,solo,correlated,legs,gam
 3,MEDIUM,3,3,0.0868554806358661,1.0,0.0,1,True,True,Jake Bauers Walk + Brice Turang Walk + Jackson Chourio Hits 1.5,2026-09-20
 3,MIXED,3,3,0.2012830283867338,2.0,0.0,1,True,True,Jackson Chourio H+R+RBI 0.5 + Jake Bauers Walk + Brice Turang Walk,2026-09-20
 3,SAFE,3,3,0.397776050511493,2.0,0.0,1,True,True,Jackson Chourio H+R+RBI 0.5 + Christian Yelich H+R+RBI 0.5 + William Contreras H+R+RBI 0.5,2026-09-20
+0,LOTTO,3,3,0.0036430450078167,0.0,0.0,1,True,True,Munetaka Murakami HR + Colson Montgomery HR + Kevin McGonigle Hits 2.5,2026-09-19
+0,MEDIUM,3,3,0.1589865385503896,0.0,0.0,1,True,True,Munetaka Murakami Walk + Kyle Teel Walk + Kevin McGonigle Walk,2026-09-19
+0,MIXED,3,3,0.2193809114123415,1.0,0.0,1,True,True,Kevin McGonigle H+R+RBI 0.5 + Munetaka Murakami Walk + Kyle Teel Walk,2026-09-19
+0,SAFE,3,3,0.3658339290317678,3.0,1.0,1,True,True,Kevin McGonigle H+R+RBI 0.5 + Riley Greene H+R+RBI 0.5 + Sam Antonacci H+R+RBI 0.5,2026-09-19
+1,MEDIUM,3,3,0.0419133204436242,0.0,0.0,3,False,False,Freddy Peralta Under 4.5 K + Kyle Schwarber HR + Pete Alonso TB 3.5,2026-09-19
+1,MIXED,4,4,0.0317697961061266,1.0,0.0,3,False,True,Freddy Peralta Under 4.5 K + Luis Arraez Hit + Pete Alonso TB 3.5 + Kyle Schwarber HR,2026-09-19
+1,SAFE,3,3,0.4122636155221086,2.0,0.0,3,False,False,Luis Arraez Hit + Pete Alonso H+R+RBI 0.5 + Junior Caminero H+R+RBI 0.5,2026-09-19
+2,LOTTO,3,3,0.0047751925286481,0.0,0.0,6,False,False,Matt Olson HR + Eugenio Suárez HR + George Springer Hits 2.5,2026-09-19
+2,MEDIUM,3,3,0.0858161966675861,2.0,0.0,6,False,False,Noah Cameron Over 5.5 K + Iván Herrera Walk + Pete Crow-Armstrong TB 2.5,2026-09-19
+2,MIXED,4,4,0.097521457681883,3.0,0.0,6,False,False,Noah Cameron Over 5.5 K + Pete Crow-Armstrong H+R+RBI 0.5 + Iván Herrera Walk + Wyatt Langford Walk,2026-09-19
+2,SAFE,3,3,0.4066391065724483,1.0,0.0,6,False,False,Pete Crow-Armstrong H+R+RBI 0.5 + Yordan Alvarez H+R+RBI 0.5 + George Springer H+R+RBI 0.5,2026-09-19
+3,LOTTO,3,3,0.0026760519297827,1.0,0.0,5,False,False,Cal Raleigh HR + Luis García Jr. Hits 2.5 + Xavier Edwards Hits 2.5,2026-09-19
+3,SAFE,3,3,0.3287928858868034,1.0,0.0,5,False,False,Joe Ryan Over 6.5 K + Luis García Jr. Hit + Mookie Betts H+R+RBI 0.5,2026-09-19
+0,LOTTO,3,3,0.0025134549858217,0.0,0.0,1,True,True,Junior Caminero HR + Chandler Simpson Hits 2.5 + Yandy Díaz Hits 2.5,2026-09-22
+0,MEDIUM,3,3,0.0345433569950549,0.0,0.0,1,True,True,Chandler Simpson Hits 1.5 + Yandy Díaz Hits 1.5 + Junior Caminero TB 2.5,2026-09-22
+0,MIXED,3,3,0.0746210425595885,1.0,0.0,1,True,True,Chandler Simpson Hit + Yandy Díaz Hits 1.5 + Junior Caminero TB 2.5,2026-09-22
+1,MEDIUM,3,3,0.0519141919687921,0.0,0.0,10,False,False,Kyle Schwarber HR + Pete Crow-Armstrong TB 3.5 + Juan Soto Walk,2026-09-22
+1,MIXED,3,3,0.1215092069205994,1.0,0.0,10,False,False,Luis Arraez Hit + Pete Crow-Armstrong TB 3.5 + Juan Soto Walk,2026-09-22
+1,SAFE,3,3,0.4230815867877942,3.0,1.0,10,False,False,Luis Arraez Hit + Pete Crow-Armstrong H+R+RBI 0.5 + Chandler Simpson Hit,2026-09-22
+2,SAFE,3,3,0.4069305906447505,2.0,0.0,1,True,True,Corbin Carroll H+R+RBI 0.5 + Hunter Goodman H+R+RBI 0.5 + Ketel Marte H+R+RBI 0.5,2026-09-22
+3,LOTTO,3,3,0.0077793415896531,1.0,0.0,4,False,False,Yordan Alvarez HR + Max Muncy HR + Shea Langeliers HR,2026-09-22
+3,SAFE,3,3,0.400885090286783,3.0,1.0,4,False,False,Yordan Alvarez H+R+RBI 0.5 + Mookie Betts H+R+RBI 0.5 + Mike Trout H+R+RBI 0.5,2026-09-22

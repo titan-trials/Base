@@ -5347,3 +5347,63 @@ game_pk,game_date,team,opponent,is_home,runs,runs_allowed
 825028,2026-09-20,New York Yankees,Arizona Diamondbacks,0,4,8
 824789,2026-09-20,Baltimore Orioles,Milwaukee Brewers,1,0,3
 824789,2026-09-20,Milwaukee Brewers,Baltimore Orioles,0,3,0
+824545,2026-09-19,Chicago White Sox,Detroit Tigers,1,3,1
+824545,2026-09-19,Detroit Tigers,Chicago White Sox,0,1,3
+824788,2026-09-19,Baltimore Orioles,Milwaukee Brewers,1,0,1
+824788,2026-09-19,Milwaukee Brewers,Baltimore Orioles,0,1,0
+822921,2026-09-19,Tampa Bay Rays,Boston Red Sox,1,2,1
+822921,2026-09-19,Boston Red Sox,Tampa Bay Rays,0,1,2
+823571,2026-09-19,New York Mets,Philadelphia Phillies,1,10,3
+823571,2026-09-19,Philadelphia Phillies,New York Mets,0,3,10
+824380,2026-09-19,Cleveland Guardians,Athletics,1,12,6
+824380,2026-09-19,Athletics,Cleveland Guardians,0,6,12
+824461,2026-09-19,Cincinnati Reds,Chicago Cubs,1,2,5
+824461,2026-09-19,Chicago Cubs,Cincinnati Reds,0,5,2
+823330,2026-09-19,Pittsburgh Pirates,Kansas City Royals,1,6,5
+823330,2026-09-19,Kansas City Royals,Pittsburgh Pirates,0,5,6
+822843,2026-09-19,Texas Rangers,Toronto Blue Jays,1,6,2
+822843,2026-09-19,Toronto Blue Jays,Texas Rangers,0,2,6
+824137,2026-09-19,Houston Astros,Atlanta Braves,1,3,6
+824137,2026-09-19,Atlanta Braves,Houston Astros,0,6,3
+823003,2026-09-19,St. Louis Cardinals,Washington Nationals,1,5,8
+823003,2026-09-19,Washington Nationals,St. Louis Cardinals,0,8,5
+824304,2026-09-19,Colorado Rockies,Seattle Mariners,1,5,3
+824304,2026-09-19,Seattle Mariners,Colorado Rockies,0,3,5
+825029,2026-09-19,Arizona Diamondbacks,New York Yankees,1,5,3
+825029,2026-09-19,New York Yankees,Arizona Diamondbacks,0,3,5
+823249,2026-09-19,San Diego Padres,Miami Marlins,1,7,6
+823249,2026-09-19,Miami Marlins,San Diego Padres,0,6,7
+823899,2026-09-19,Los Angeles Dodgers,San Francisco Giants,1,10,4
+823899,2026-09-19,San Francisco Giants,Los Angeles Dodgers,0,4,10
+823976,2026-09-19,Los Angeles Angels,Minnesota Twins,1,6,5
+823976,2026-09-19,Minnesota Twins,Los Angeles Angels,0,5,6
+823543,2026-09-22,New York Yankees,Tampa Bay Rays,1,2,0
+823543,2026-09-22,Tampa Bay Rays,New York Yankees,0,0,2
+823494,2026-09-22,New York Yankees,Tampa Bay Rays,1,1,6
+823494,2026-09-22,Tampa Bay Rays,New York Yankees,0,6,1
+824222,2026-09-22,Detroit Tigers,Washington Nationals,1,1,3
+824222,2026-09-22,Washington Nationals,Detroit Tigers,0,3,1
+823328,2026-09-22,Pittsburgh Pirates,St. Louis Cardinals,1,2,0
+823328,2026-09-22,St. Louis Cardinals,Pittsburgh Pirates,0,0,2
+823412,2026-09-22,Philadelphia Phillies,Milwaukee Brewers,1,6,4
+823412,2026-09-22,Milwaukee Brewers,Philadelphia Phillies,0,4,6
+824709,2026-09-22,Boston Red Sox,Cleveland Guardians,1,2,3
+824709,2026-09-22,Cleveland Guardians,Boston Red Sox,0,3,2
+824867,2026-09-22,Atlanta Braves,Cincinnati Reds,1,0,4
+824867,2026-09-22,Cincinnati Reds,Atlanta Braves,0,4,0
+824061,2026-09-22,Kansas City Royals,Chicago White Sox,1,11,14
+824061,2026-09-22,Chicago White Sox,Kansas City Royals,0,14,11
+824624,2026-09-22,Chicago Cubs,Miami Marlins,1,2,8
+824624,2026-09-22,Miami Marlins,Chicago Cubs,0,8,2
+822840,2026-09-22,Texas Rangers,New York Mets,1,3,6
+822840,2026-09-22,New York Mets,Texas Rangers,0,6,3
+824302,2026-09-22,Colorado Rockies,Arizona Diamondbacks,1,2,7
+824302,2026-09-22,Arizona Diamondbacks,Colorado Rockies,0,7,2
+824953,2026-09-22,Athletics,Los Angeles Angels,1,9,7
+824953,2026-09-22,Los Angeles Angels,Athletics,0,7,9
+823089,2026-09-22,Seattle Mariners,Houston Astros,1,0,7
+823089,2026-09-22,Houston Astros,Seattle Mariners,0,7,0
+823166,2026-09-22,San Francisco Giants,Minnesota Twins,1,2,3
+823166,2026-09-22,Minnesota Twins,San Francisco Giants,0,3,2
+823897,2026-09-22,Los Angeles Dodgers,San Diego Padres,1,7,0
+823897,2026-09-22,San Diego Padres,Los Angeles Dodgers,0,0,7

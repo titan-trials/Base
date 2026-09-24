@@ -1,0 +1,15 @@
+market,player,line,prob_over,hold,n_books,commence_time,home_team,away_team,game_date,fetched_at_utc
+pitcher_strikeouts,Brady Singer,3.5,0.5329453001897289,0.0650118203309693,6,2026-09-24T23:16:00Z,Atlanta Braves,Cincinnati Reds,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Mason Barnett,3.5,0.4844274303507364,0.06668836280486756,4,2026-09-25T01:41:00Z,Athletics,Houston Astros,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Andrew Painter,4.5,0.5828822517990193,0.06708595387840655,3,2026-09-24T22:06:00Z,Philadelphia Phillies,Milwaukee Brewers,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Grayson Rodriguez,4.5,0.5669628356962546,0.06451836680761103,6,2026-09-25T01:41:00Z,Seattle Mariners,Los Angeles Angels,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Nick Pivetta,4.5,0.4949739431831014,0.06542703262735639,6,2026-09-25T02:11:00Z,Los Angeles Dodgers,San Diego Padres,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Ranger Suarez,4.5,0.44324342310187376,0.06727766920502276,6,2026-09-24T22:46:00Z,Boston Red Sox,Cleveland Guardians,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Peter Lambert,4.5,0.4329079304986734,0.06671996164851313,6,2026-09-25T01:41:00Z,Athletics,Houston Astros,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Ian Seymour,5.5,0.568331380676492,0.0674724394293853,4,2026-09-24T23:06:00Z,New York Yankees,Tampa Bay Rays,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Tyler Mahle,5.5,0.5422228424234525,0.0634773543768864,6,2026-09-24T23:16:00Z,Atlanta Braves,Cincinnati Reds,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Andrew Painter,5.5,0.4433120850693241,0.06155012059582754,2,2026-09-24T22:06:00Z,Philadelphia Phillies,Milwaukee Brewers,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Bryan Woo,6.5,0.5533887014026159,0.06578102939288932,6,2026-09-25T01:41:00Z,Seattle Mariners,Los Angeles Angels,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Tyler Glasnow,6.5,0.551647547137034,0.066347526664987,6,2026-09-25T02:11:00Z,Los Angeles Dodgers,San Diego Padres,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Cam Schlittler,6.5,0.4414332296336855,0.06431306621836186,6,2026-09-24T23:06:00Z,New York Yankees,Tampa Bay Rays,2026-09-24,2026-09-24T19:19:47Z
+pitcher_strikeouts,Ian Seymour,6.5,0.4349783929828279,0.06191593770002135,2,2026-09-24T23:06:00Z,New York Yankees,Tampa Bay Rays,2026-09-24,2026-09-24T19:19:47Z
