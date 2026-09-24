@@ -1635,6 +1635,10 @@ python test_hitter_log.py     # 14 checks, the important one being that
 python test_odds_retry.py     # which HTTP failures may be retried.
                               # Asserts on urlopen CALL COUNT, because the
                               # call count is the credit count
+python test_cache_damage.py   # a damaged cache must not take down a run,
+                              # and a write must be all-or-nothing
+python diagnose_cache.py --gaps   # READ ONLY: which caches are damaged,
+                              # and what shape the damage is
 python check.py               # renders every dashboard tab path, 6 cases,
                               # plus the clock / .gitignore / nested-
                               # expander guards
@@ -2252,6 +2256,186 @@ true, and it was the justification for the whole file.
   other guards were — by removing the timeout clause first and watching all
   three timeout cases fail — then restored. No dependency added;
   `odds_lines` uses `urllib`, so `tenacity` and `requests` were not needed.
+
+### V12.8 ✅ (Sep 24, 2026) — one bad row in one cache took down a whole run
+  `score_slate 2026-09-22` died on:
+
+      ValueError: time data " Yordan"" doesn't match format "%Y-%m-%d"
+
+  `" Yordan"` is the back half of `"Alvarez, Yordan"`. A chunk of bytes had
+  gone missing from the middle of one row in `statcast_player_670541.csv`,
+  so the fields after it shifted left and a NAME landed in the game_date
+  column. One row in 10,898, in 5 files of 539, stopped everything.
+  - **The protection already existed and was unreachable.**
+    `refresh.load_player_cache` does `pd.to_datetime(..., errors="coerce")`
+    then `dropna` — written by someone who knew these files can carry junk.
+    But it calls `cache.load_cached` first, and that parsed dates strictly,
+    so it raised one frame BEFORE the guard could run. The legacy-file
+    branch three lines below it was already wrapped in `try/except`. The
+    canonical path was the only unguarded one.
+  - **And the drop must not be silent.** Five files had been damaged for two
+    days; the only reason it surfaced is that the sixth broke hard.
+    `load_cached` now names the file and the row count when it drops
+    anything, and points at `diagnose_cache.py`.
+  - **`save_cache` is now atomic** — `to_csv` to `path.tmp.{pid}` then
+    `os.replace`. A reader sees the whole old file or the whole new one,
+    never a half-formed mix. On failure the temp file is removed and the
+    existing cache is left alone.
+  - **Not a writer bug.** 534 files are clean and the damaged five have
+    exactly ONE bad row each; every other row in those same files quotes
+    `"Alvarez, Yordan"` correctly. A quoting bug does not fire once in
+    10,000 rows. Bytes were lost after the row was formed — cause not
+    settled, but the project lives inside OneDrive with ~1.2 GB of CSVs
+    rewritten nightly, which is the obvious suspect. The atomic write may
+    remove the opportunity regardless.
+  - `test_cache_damage.py` (15 checks) covers both properties, and found
+    something while doing it: **a damaged row that begins with a lone `"`
+    swallows the row after it**, because the quote opens a field that runs
+    to the next quote character. So one lost chunk can cost two rows, and
+    the second leaves no trace a column-count check can see. Three of the
+    five have that shape.
+
+### V12.8b ❌ (Sep 24, 2026) — the pitch-number gap scan was a FALSE ALARM
+  Written because a field-count check only catches a dropped chunk that
+  breaks a row's column count; one that swallowed whole lines would scan
+  clean while the file quietly lost pitches. The invariant used: within an
+  at-bat, Statcast numbers pitches 1..N with no holes.
+  It fired on **58 files**. All but two are benign, and the evidence is
+  decisive on both counts:
+  - **Six players have the SAME hole in their canonical cache and in a
+    legacy `statcast_id*.csv` pulled ~8 weeks earlier by different code**
+    (663457, 669701, 671732, 681082, 683011, 686797). Two independent pulls
+    do not lose the same two pitches. Those pitches were never in what
+    Statcast sent.
+  - **The game_pks span 2022–2026.** A write that went wrong during one
+    refresh cannot reach back four seasons.
+  - **The shape explains itself.** Almost every hole is LEADING — missing
+    1, or 1-2, or 1-2-3-4-5, with the rest intact. That is a batter who
+    entered an at-bat already in progress: a pinch hitter sent up with two
+    strikes owns the remainder of the at-bat, and a per-batter cache holds
+    only his own pitches. **The invariant was wrong — it assumed one batter
+    per at-bat, and baseball does not guarantee that.**
+  `diagnose_cache.py` now classifies rather than accuses: leading holes get
+  one summary line, only INTERIOR holes are listed, and duplicate pitch
+  numbers are reported even when nothing is missing (a survivor there would
+  mean the dedupe key is not unique). Two interior holes exist in ~100,000
+  at-bats — `681807` game 776218 at-bat 46, and `694192` game 813033 at-bat
+  53. Noted, not chased.
+  **Worth remembering:** the first version of the same script also guessed
+  the CAUSE from the damage's position ("not at EOF, so it's the writer"),
+  which was wrong because these files are fully rewritten every refresh.
+  Two wrong verdicts from one script in one day, both from an invariant
+  that had not been checked against how the thing actually behaves.
+
+### V12.9 ✅ (Sep 24, 2026) — the two changes graded, and the real miss found
+  504 graded starts from `pitcher_row_log.csv`, split at 2026-09-15 where
+  `velo_z_used` and `k_rate_base` first appear (136 post, 368 pre).
+  Measured on **rate error** (`k_rate × actual BF − actual K`), because
+  total error mixes in every start cut short, and `K_PRIOR_BF` moves the
+  rate and nothing else. Arm type is each pitcher's `k_rate` from his OTHER
+  starts — bucketing on this start's `k_rate` is circular, the same trap as
+  `lab_tto_who`.
+  - **`K_PRIOR_BF` 250 → 150 works, direction confirmed.** Tilt slope went
+    −0.414 ± 0.113 (z = −3.65) to +0.269 ± 0.205 (z = +1.31); the change
+    itself is +0.684 ± 0.235, **z = +2.92**. The pre-change tilt is real and
+    matches the lab's sign and size. Where it landed is NOT resolved — post
+    is consistent both with the lab's predicted 0.03 and with a mild
+    over-correction. Pinning it to ±0.1 needs ~530 starts, about 19 more
+    slates. **No further change.**
+  - **The two hot low-line bands closed.** K>5.5 at 35–50% went −12.7% ±
+    4.3% to +6.5% ± 7.2%; K>6.5 at 0–20% went −8.9% ± 3.1% to −3.3% ± 4.4%.
+    Nothing post-change is significant either way (3–55 rows a band).
+  - **Velocity: no verdict.** A residual exists (r = −0.161, hot arms still
+    under-projected) and it survives controlling for arm type — the two
+    correlate only +0.059, so it is not the prior tilt counted twice. But a
+    2,000-draw permutation null gives **z = −1.89, p = 0.066**, under this
+    project's own bar, and 132 live starts do not overturn a slope measured
+    on 11,148. The pre/post comparison that would settle it is unavailable:
+    `velo_base` is only logged from 09-15, giving 19 pre-change rows.
+    **Not acted on.**
+
+### V12.9b 🔴 — THE REAL MISS: the K distribution has no room for a blow-up
+  Total error is +0.53 K, which decomposes as workload **+1.40 batters**
+  (z = +6.32) and rate **≈ 0**. The rate is fine. The workload number is
+  **not a level error** — that reading was wrong and is corrected here:
+
+  | | starts | mean overshoot |
+  |---|---|---|
+  | 15+ batters faced | 454 (90.1%) | **+0.10** |
+  | under 15 | 50 (9.9%) | **+13.23** |
+
+  Median +0.44, mean +1.40, skew +1.54. The central projection is near
+  exact; the mean is dragged by the ~10% of starts where a pitcher is
+  knocked out early. **Lowering the level would make 90% of starts worse.**
+  The probability integral transform on `k_dist` (randomised, since K is
+  discrete) gives **chi-square 54.1 on 9 df** — bottom decile 16.7% against
+  10% expected, top decile 5.0%. Not a width problem, a left-tail problem,
+  and it shows at every threshold:
+
+  | | model says | happened | gap |
+  |---|---|---|---|
+  | K ≤ 0 | 1.04% | 3.78% | **+2.75% ± 0.45** |
+  | K ≤ 1 | 5.21% | 9.96% | **+4.75% ± 0.98** |
+  | K ≤ 2 | 14.10% | 21.51% | **+7.41% ± 1.51** |
+  | K ≤ 4 | 43.40% | 51.20% | **+7.79% ± 2.10** |
+  | K ≤ 6 | 72.72% | 77.09% | **+4.37% ± 1.88** |
+
+  **Every under is under-priced by 4–8 points, so every over is over-priced
+  by the same.** This is the −13.5 point low-line gap in its general form,
+  and it is a bigger effect than either shipped change.
+  The mechanism is named in `bf_pmf`'s own docstring: the non-opener
+  `league_pmf` support "starts around thirteen batters", and exponential
+  tilting "cannot pull a distribution below its own support — it can only
+  pile mass on the bottom point." **7.6% of real starts finish under 13
+  batters faced.** For those 38 starts the model expected 22.0 BF and 5.00
+  K; they faced 7.4 and struck out 1.84.
+  Starts of 15+ BF have a mean PIT of 0.469 and 12.2% in the bottom decile —
+  calibrated. So the fix is NOT to move the mean. It is to give the
+  non-opener support a left tail carrying roughly the empirical knockout
+  rate. **Design not settled; nothing changed yet.**
+
+### V12.10 ✅ (Sep 24, 2026) — a thin-slate warning, and two checks that were not running
+  - **Thin slates were silent.** `cache/slate_2026-09-21.csv` held 54
+    hitters across 3 games where a September slate is ~270 across 15, and
+    that night graded 11 hitters. **Nothing was broken**: `get_slate`
+    returns every scheduled game, `preserve_committed_rows` only ever ADDS
+    games, and `predict_slate` wrote exactly what it could see. The slate
+    was built several days early, when the feed had lineups for almost
+    nothing, and never re-run closer to first pitch. Every piece behaved
+    and a night of evidence was quietly worth a fifth of what it should be.
+    `predict_slate.report_coverage` now compares predicted games against
+    scheduled games and says the difference out loud, naming the missing
+    matchups and — when the run IS early — saying to re-run later, since
+    committed rows are preserved and re-running costs nothing.
+    **Warns, never blocks**: a genuinely short slate exists, and the fix
+    for running early is to run again, not to refuse the early run.
+    `test_thin_slate.py` (17 checks), most of them about it STAYING QUIET —
+    a warning that fires on normal nights gets ignored, and one that can
+    throw would take down the run it protects.
+  - **`check.py` had not started in weeks.** `RUN` pointed at a `run/`
+    sandbox that is gitignored, so it does not survive a clone and was not
+    on disk; check.py died on import with FileNotFoundError and every guard
+    below it — the `.gitignore` check, the nested-expander walk — went
+    unrun. It now falls back to the project root, and picks the NEWEST
+    `slate_*.csv` instead of naming `slate_2026-09-12.csv`, which made the
+    whole check one cache cleanup away from dying for a reason unrelated to
+    the dashboard.
+  - **The clock guard was green for the wrong reason.** It rendered from
+    the literal string `"cache"`, chdir'ing one level BELOW the project
+    root where no `cache/` exists. Every data read failed silently — they
+    are all wrapped in `os.path.exists` by design — and the clock passed
+    anyway, because the clock does not depend on data.
+  - **And all of it had been reading a mis-decoded file for months.**
+    `harness.py` did `open(SCRIPT).read()` with no encoding. On Windows
+    that is cp1252, and `dashboard.py` is UTF-8. The other 155 non-ASCII
+    characters all happen to map to SOMETHING in cp1252 (`—` becomes
+    `â€"`, `·` becomes `Â·`), so the file parsed and the guards "passed"
+    while operating on mangled text — the corruption only ever landed
+    inside string literals. One `←` in `st.button("← all games")` is the
+    single byte cp1252 refuses outright, and that is what finally raised.
+    All four source reads in `harness.py` and `check.py` now pin
+    `encoding="utf-8"`.
+  Green after: 6/6 render cases, clock, gitignore (12 files), expanders.
 
 ### WATCH — both changes are live and neither has been graded
   Every pitcher on the board moves tonight. `pitcher_row_log.csv` records

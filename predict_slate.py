@@ -388,6 +388,76 @@ def starter_share_for(hitter, pid, exposure: dict, pa_model, default: float) -> 
     return float(np.clip(faced / exp_pa, 0.25, 0.90))
 
 
+def report_coverage(out, slate, game_date):
+    """
+    Say so when this slate covers fewer games than the schedule lists.
+
+    WHY THIS EXISTS
+    ---------------
+    cache/slate_2026-09-21.csv held 54 hitters across 3 games. A September
+    slate is about 270 across 15. It was built several days early, when the
+    feed had lineups for almost nothing, and never re-run closer to game
+    time -- so it stayed at 3, and the night graded 11 hitters.
+
+    Nothing was broken. get_slate returns every scheduled game,
+    preserve_committed_rows only ever ADDS games, and predict_slate wrote
+    exactly what it could see. Each piece behaved, and the result was a
+    night of evidence quietly worth a fifth of what it should have been.
+    Three weeks later that is expensive: K_PRIOR_BF needs roughly 19 more
+    slates to resolve and thin ones do not count.
+
+    So this compares what got predicted against what is scheduled and says
+    the difference out loud. It does not block the run -- a genuinely short
+    slate exists, and the fix for running early is to run again later, not
+    to refuse the early run.
+    """
+    if slate is None or getattr(slate, "empty", True) or out.empty:
+        return
+    scheduled = int(slate["game_pk"].nunique())
+    covered = int(out["game_pk"].nunique())
+    if covered >= scheduled:
+        return
+
+    missing = scheduled - covered
+    print()
+    print("  " + "!" * 68)
+    print(f"  THIN SLATE -- {covered} of {scheduled} scheduled games have "
+          f"predictions.")
+    print(f"  {missing} game(s) produced no rows, almost always because "
+          f"their lineups")
+    print("  are not published yet.")
+    try:
+        have = set(out["game_pk"].unique())
+        gone = slate[~slate["game_pk"].isin(have)]
+        for g in gone.head(8).itertuples():
+            print(f"      {g.away_team} @ {g.home_team}")
+        if len(gone) > 8:
+            print(f"      ... and {len(gone) - 8} more")
+    except Exception:
+        pass
+
+    try:
+        days = (pd.Timestamp(game_date).normalize()
+                - pd.Timestamp.today().normalize()).days
+    except Exception:
+        days = None
+    if days is not None and days >= 1:
+        print(f"\n  This is {days} day(s) BEFORE {game_date}. Lineups are not "
+              f"out yet,")
+        print("  which is the usual cause. Re-run closer to first pitch and "
+              "the missing")
+        print("  games will be added -- committed rows for games already "
+              "underway are")
+        print("  preserved, so re-running costs nothing and loses nothing.")
+    else:
+        print("\n  Re-run when the remaining lineups post. Games already "
+              "underway keep")
+        print("  the numbers committed before first pitch.")
+    print("  A slate this thin will grade on a fraction of the hitters it "
+          "should.")
+    print("  " + "!" * 68)
+
+
 def preserve_committed_rows(fresh, existing_path, now_utc, force):
     """
     Keep rows for games that have already started; take the rest from `fresh`.
@@ -1201,6 +1271,7 @@ def main(game_date: str = None):
     path = cache_path(f"slate_{game_date}")
     out.to_csv(path, index=False)
     print(f"\nSaved {len(out)} predictions to cache/slate_{game_date}.csv")
+    report_coverage(out, slate, game_date)
 
     if not pitchers_out.empty:
         # Same preservation rule as the hitters: a starter whose game has

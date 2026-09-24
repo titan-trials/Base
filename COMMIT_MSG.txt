@@ -1,57 +1,83 @@
-Retry the odds fetch, but only on failures that cannot have been billed
+Grade the two model changes; warn on thin slates; make check.py run again
 
-A failed odds pull costs a window that cannot be re-bought -- historical
-odds are not on the free tier, so a game not priced before first pitch can
-never be benchmarked by anyone. That argues for retrying. Player props are
-billed PER EVENT against a 500-credit month, which argues for not.
+GRADING (CONTEXT V12.9)
 
-The two mistakes are not symmetric, and that asymmetry is the whole design:
+504 graded starts from pitcher_row_log.csv, split at 2026-09-15 where
+velo_z_used and k_rate_base first appear. Measured on RATE error
+(k_rate x actual BF - actual K), because total error mixes in every start
+cut short and K_PRIOR_BF moves the rate and nothing else. Arm type is each
+pitcher's k_rate from his OTHER starts -- bucketing on this start's k_rate
+is circular, the same trap as lab_tto_who.
 
-  give up too early   -> already_captured() reads odds_{date}.csv and
-                         returns the games already held, so a re-run buys
-                         only what is missing. Recoverable, free.
+  K_PRIOR_BF 250 -> 150 WORKS, direction confirmed. Tilt slope went
+  -0.414 +/- 0.113 (z = -3.65) to +0.269 +/- 0.205 (z = +1.31); the change
+  is +0.684 +/- 0.235, z = +2.92. Where it LANDED is not resolved -- post
+  is consistent both with the lab's predicted 0.03 and with a mild
+  over-correction, and pinning it needs ~19 more slates. No further change.
 
-  retry too eagerly   -> the first request may have reached the server and
-                         been billed. The retry is billed again. Nothing
-                         gives that credit back.
+  The two hot low-line bands closed. K>5.5 at 35-50% went -12.7% to +6.5%;
+  K>6.5 at 0-20% went -8.9% to -3.3%.
 
-So _get() -- the single HTTP choke point in data/odds_lines.py -- retries
-only what provably never reached a server that could charge for it:
-connection refused, connection reset, DNS failure, network unreachable, and
-5xx the server itself sent. Three attempts, exponential backoff from 1.5s
-with 25% jitter, under 10 seconds worst case so the retry cannot itself eat
-a lock time.
+  Velocity: NO VERDICT. A residual exists (r = -0.161) and survives
+  controlling for arm type, but a 2,000-draw permutation null gives
+  z = -1.89, p = 0.066 -- under this project's bar -- and 132 live starts
+  do not overturn a slope measured on 11,148. Not acted on.
 
-Timeouts are NOT retried. Twenty seconds of silence is not proof the
-request never arrived -- the API may have served a slow query and charged
-for it while we stopped listening. A truncated body is not retried either:
-a half-read answer is proof the server answered. 4xx is never retried; 401
-is a bad key, 422 bad parameters, and 429 means the quota is gone and
-asking again makes it worse. Ambiguity falls on the do-not-retry side by
-construction.
+THE REAL MISS (CONTEXT V12.9b)
 
-No dependency added. odds_lines uses urllib, so the tenacity/requests
-suggestion in improvement_plan.md was not needed -- only `socket` and
-`random`.
+Total error +0.53 K decomposes as workload +1.40 batters and rate ~0. The
+workload number is NOT a level error: starts of 15+ BF (90.1%) overshoot
+by +0.10, starts under 15 (9.9%) by +13.23. Lowering the level would make
+90% of starts worse.
 
-test_odds_retry.py (53 checks) asserts on the NUMBER OF URLOPEN CALLS in
-every case, because the call count is the credit count. Nothing touches the
-network; urlopen and time.sleep are replaced. It covers the happy path, the
-five never-retried failures, the eight retried ones, recovery on the second
-and third try, and that the backoff is jittered and bounded. Part 6 asserts
-already_captured is still the thing standing between a re-run and a second
-bill -- if that ever stops skipping, this entire policy is wrong.
+The PIT on k_dist gives chi-square 54.1 on 9 df -- bottom decile 16.7%
+against 10% expected. A left-tail problem, at every threshold:
 
-Verified the way the .gitignore and nested-expander guards were: the
-timeout clause was removed first and all three timeout cases failed, then
-restored.
+    K <= 1   said 5.21%   happened  9.96%   +4.75% +/- 0.98
+    K <= 2   said 14.10%  happened 21.51%   +7.41% +/- 1.51
+    K <= 4   said 43.40%  happened 51.20%   +7.79% +/- 2.10
 
-Docs: NEW README.md -- setup, the two nightly commands, the credit rules,
-labs, tests, what is tracked in git and why, and a symptom table. CONTEXT.md
-keeps the reasoning; README is how to run it. CONTEXT.md gains the V12.7
-entry, the six newer tests in its Tests block, a retry note on the odds
-step, and a correction to a stale `pip install` line that contradicted
-requirements.txt.
+Every under is under-priced by 4-8 points. Bigger than either shipped
+change. bf_pmf's own docstring names the mechanism: the non-opener
+league_pmf support "starts around thirteen batters" and tilting "cannot
+pull a distribution below its own support". 7.6% of real starts finish
+under 13. Design not settled; nothing changed.
 
-Tests: test_odds_retry.py 53/53 (new), test_slips.py, test_velocity.py,
-test_hitter_log.py, test_workload.py, test_relief_tier.py, check.py 6/6.
+THIN SLATES (CONTEXT V12.10)
+
+slate_2026-09-21.csv held 54 hitters across 3 games where a September
+slate is ~270 across 15, and that night graded 11 hitters. Nothing was
+broken -- get_slate returns every scheduled game, preserve_committed_rows
+only ever ADDS games, predict_slate wrote what it could see. It was built
+days early and never re-run. Every piece behaved and the evidence was
+worth a fifth of what it should be.
+
+predict_slate.report_coverage compares predicted against scheduled games
+and says the difference out loud, naming the missing matchups and, when
+the run is early, saying to re-run later. Warns, never blocks: a genuinely
+short slate exists. test_thin_slate.py (17 checks), most about it STAYING
+QUIET -- a warning that fires on normal nights gets ignored.
+
+CHECK.PY HAD NOT STARTED IN WEEKS
+
+RUN pointed at a gitignored run/ sandbox that no longer exists, so check.py
+died on import and the .gitignore and nested-expander guards never ran. It
+now falls back to the project root and picks the NEWEST slate instead of
+naming slate_2026-09-12.csv.
+
+The clock guard was green for the wrong reason: it rendered from the
+literal string "cache", one level below the project root, where every data
+read failed silently (all wrapped in os.path.exists by design) while the
+clock passed because it does not depend on data.
+
+And all of it had been reading a mis-decoded file. harness.py did
+open(SCRIPT).read() with no encoding -- cp1252 on Windows, and dashboard.py
+is UTF-8. The other 155 non-ASCII characters all map to SOMETHING in cp1252
+(em dash becomes a three-character sequence), so the file parsed and the
+guards "passed" on mangled text, since the corruption only landed inside
+string literals. One arrow in st.button("<- all games") is the single byte
+cp1252 refuses, and that is what finally raised. All four source reads now
+pin encoding="utf-8".
+
+Green after: check.py 6/6 render cases, clock, gitignore (12 files),
+expanders; test_thin_slate.py 17/17.

@@ -204,7 +204,13 @@ def render(cache_dir, query=None, label=""):
     os.chdir(cache_dir)
     err = None
     try:
-        src = open(SCRIPT).read()
+        # encoding="utf-8" is not optional. Bare open() uses the locale
+        # encoding, which on Windows is cp1252, and dashboard.py is UTF-8
+        # -- one accented player name or an em dash anywhere in it and
+        # every render case dies with UnicodeDecodeError before a single
+        # row is drawn. The failure names a byte offset, not a cause, so
+        # it reads like the harness is broken rather than the open() call.
+        src = open(SCRIPT, encoding="utf-8").read()
         g = {"__name__": "__main__", "__file__": SCRIPT}
         exec(compile(src, SCRIPT, "exec"), g)
     except SystemExit as e:

@@ -1,13 +1,40 @@
 """Render every tab path and report."""
-import os, sys, re
+import os, sys, re, glob
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
 
-RUN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run")
+HERE = os.path.dirname(os.path.abspath(__file__))
 
-# game_pk to drill into -- read from the real slate
+# WHERE THE DASHBOARD IS RENDERED FROM
+# ------------------------------------
+# harness.render() chdirs here and dashboard.py reads cache/ relative to
+# it, so this has to be a directory CONTAINING a cache/.
+#
+# It used to be a frozen `run/` sandbox, so the check rendered against an
+# unchanging copy. That directory is gitignored, so it does not survive a
+# fresh clone and was not on this machine -- check.py died on import with
+# FileNotFoundError and every guard below it went unrun. A check that
+# cannot start is worse than one that reads live data, so: use the
+# sandbox when it exists, otherwise the project root, whose cache/ is the
+# real one.
+RUN = os.path.join(HERE, "run")
+if not os.path.isdir(os.path.join(RUN, "cache")):
+    RUN = HERE
+print(f"rendering from {'run/ sandbox' if RUN != HERE else 'the live cache'}")
+
+# game_pk to drill into -- read from the newest real slate.
+#
+# This named slate_2026-09-12.csv outright, which meant the check was
+# always one cache cleanup away from dying, and it died for a reason that
+# had nothing to do with the dashboard.
 import pandas as pd
-slate = pd.read_csv(os.path.join(RUN, "cache", "slate_2026-09-12.csv"))
+_slates = sorted(glob.glob(os.path.join(RUN, "cache", "slate_*.csv")))
+if not _slates:
+    print(f"No slate_*.csv under {os.path.join(RUN, 'cache')} -- "
+          f"nothing to render against.")
+    sys.exit(1)
+slate = pd.read_csv(_slates[-1], low_memory=False)
+print(f"drill-down slate: {os.path.basename(_slates[-1])}")
 pk = int(slate["game_pk"].dropna().iloc[0])
 pids = [str(int(x)) for x in slate["player_id"].dropna().unique()[:3]]
 
@@ -63,6 +90,12 @@ cards = re.findall(r'class="sp-find-t">(.*?)<', r["html"])
 print("cards:", cards or "(none)")
 
 
+# Every open() below passes encoding="utf-8" deliberately. Bare open()
+# takes the locale encoding, cp1252 on this machine, and dashboard.py is
+# UTF-8 -- these three guards all read it, so without this they die on the
+# first accented name in the file and report a byte offset instead of a
+# cause.
+
 # ---- the live clock ---------------------------------------------------
 #
 # It renders through st.components.v1, which is a different code path from
@@ -70,7 +103,12 @@ print("cards:", cards or "(none)")
 # "simplifies" this into an st.markdown call it will keep rendering and
 # quietly stop ticking. Cheapest possible guard.
 import harness as _h
-_h.render(CACHE_DIR if "CACHE_DIR" in dir() else "cache", {}, "clock")
+# Render from RUN like every case above. This used to pass the literal
+# string "cache", which chdir'd one level BELOW the project root, where no
+# cache/ exists -- every data read failed silently (they are all wrapped in
+# os.path.exists by design) and the clock check passed anyway, because the
+# clock does not depend on data. It was green for the wrong reason.
+_h.render(RUN, {}, "clock")
 _clock = [a[0] for n, a, k in _h.CALLS if n == "components.html"]
 print()
 if _clock and "setInterval" in _clock[0] and "America/New_York" in _clock[0]:
@@ -96,7 +134,7 @@ else:
 import re as _re, os as _os, fnmatch as _fn
 
 _src = open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                          "dashboard.py")).read()
+                          "dashboard.py"), encoding="utf-8").read()
 _gi_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
                          ".gitignore")
 _reads = set(_re.findall(r'CACHE_DIR,\s*f?"([^"]+)"', _src))
@@ -106,7 +144,8 @@ print()
 if not _os.path.exists(_gi_path):
     print("gitignore         --    .gitignore not staged here; skipped")
 else:
-    _allow = set(_re.findall(r'^!cache/(\S+)', open(_gi_path).read(), _re.M))
+    _gi = open(_gi_path, encoding="utf-8").read()
+    _allow = set(_re.findall(r'^!cache/(\S+)', _gi, _re.M))
     _missing = []
     for _p in sorted(_reads):
         _b = _re.sub(r"\{[^}]+\}", "*", _os.path.basename(_p))
@@ -158,7 +197,7 @@ def _expander_depth(node, depth=0, worst=None):
     return worst
 
 
-_depth, _label = _expander_depth(_ast.parse(open(_dash).read()))
+_depth, _label = _expander_depth(_ast.parse(open(_dash, encoding="utf-8").read()))
 print()
 if _depth > 1:
     print(f"expanders        FAIL  nested expander ({_label!r}) -- Streamlit "
