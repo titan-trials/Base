@@ -60,6 +60,8 @@ USAGE
 """
 import os
 import json
+import socket
+import random
 import time
 import urllib.request
 import urllib.error
@@ -157,22 +159,80 @@ def load_api_key() -> str:
     )
 
 
-def _get(url: str):
+# Retries, and the one rule that decides which failures get one.
+#
+# Player props are charged PER EVENT. So a retry is only safe when the
+# request CANNOT have reached the server -- DNS failure, connection
+# refused, connection reset, or a 5xx the server itself says it did not
+# process. Those cost nothing and are worth repeating.
+#
+# A TIMEOUT is the dangerous one and is deliberately NOT retried. Twenty
+# seconds without a reply does not mean the request never arrived; the
+# Odds API may have served and BILLED it while the response was lost. On a
+# 500-credit month at ~25 credits a slate, paying twice for one event to
+# save a re-run is a bad trade -- especially because the re-run is nearly
+# free: `already_captured()` reads odds_{date}.csv and skips every game
+# already in it, so running the odds step again fetches only what is
+# missing. A truncated body (JSONDecodeError) is the same case -- the
+# server answered, so it billed.
+#
+# 4xx is never retried either: 401 is a bad key, 422 bad parameters, and
+# 429 means the quota is gone and asking again makes it worse.
+RETRY_ATTEMPTS = 3
+RETRY_BASE_SEC = 1.5
+
+
+def _get(url: str, attempts: int = RETRY_ATTEMPTS):
     """Returns (payload, headers) or (None, {}) on failure. Never raises."""
-    try:
-        with urllib.request.urlopen(
-                urllib.request.Request(
-                    url, headers={"User-Agent": "baseball_predictor/1.0"}),
-                timeout=TIMEOUT_SEC) as response:
-            return json.load(response), dict(response.headers)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", "replace")[:300]
-        print(f"    HTTP {exc.code}: {body}")
-        return None, {}
-    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError,
-            OSError) as exc:
-        print(f"    Request failed: {exc}")
-        return None, {}
+    for attempt in range(1, attempts + 1):
+        last = attempt == attempts
+        try:
+            with urllib.request.urlopen(
+                    urllib.request.Request(
+                        url, headers={"User-Agent": "baseball_predictor/1.0"}),
+                    timeout=TIMEOUT_SEC) as response:
+                return json.load(response), dict(response.headers)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")[:300]
+            print(f"    HTTP {exc.code}: {body}")
+            # Only the server's own "I failed" is worth repeating.
+            if exc.code >= 500 and not last:
+                _backoff(attempt, f"HTTP {exc.code}")
+                continue
+            return None, {}
+        except json.JSONDecodeError as exc:
+            print(f"    Truncated response ({exc}). NOT retried -- the "
+                  f"server answered, so it billed. Re-run the odds step; "
+                  f"captured games are skipped.")
+            return None, {}
+        except (TimeoutError, socket.timeout) as exc:
+            print(f"    Timed out after {TIMEOUT_SEC}s ({exc}). NOT retried "
+                  f"-- this may have been served and billed. Re-run the odds "
+                  f"step; captured games are skipped.")
+            return None, {}
+        except (urllib.error.URLError, OSError) as exc:
+            # URLError wraps a socket timeout too, and that one must follow
+            # the timeout rule rather than the connection-error rule.
+            if isinstance(getattr(exc, "reason", None),
+                          (TimeoutError, socket.timeout)):
+                print(f"    Timed out after {TIMEOUT_SEC}s. NOT retried -- "
+                      f"this may have been served and billed. Re-run the "
+                      f"odds step; captured games are skipped.")
+                return None, {}
+            print(f"    Request failed: {exc}")
+            if not last:
+                _backoff(attempt, str(exc)[:60])
+                continue
+            return None, {}
+    return None, {}
+
+
+def _backoff(attempt: int, why: str):
+    """Wait before the next try. Jittered so parallel runs do not sync up."""
+    delay = RETRY_BASE_SEC * (2 ** (attempt - 1))
+    delay += random.uniform(0, delay * 0.25)
+    print(f"    retrying in {delay:.1f}s ({why})")
+    time.sleep(delay)
 
 
 def list_events(api_key: str, game_date: str) -> list:
