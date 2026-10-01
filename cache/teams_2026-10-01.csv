@@ -1,0 +1,2 @@
+game_pk,game_date,home_team,away_team,home_runs,away_runs,total_runs,home_lineup_runs,away_lineup_runs,home_win_prob,away_win_prob,home_hitters,away_hitters,predicted_at_utc,start_time_utc
+849844,2026-10-01,ATL,PHI,4.754025677584685,4.709858845608945,9.46388452319363,4.580539560412588,4.53798448502104,0.51115813133166,0.48884186866834,9,9,2026-10-01T14:55:43Z,2026-10-02T00:00:00Z

@@ -5407,3 +5407,27 @@ game_pk,game_date,team,opponent,is_home,runs,runs_allowed
 823166,2026-09-22,Minnesota Twins,San Francisco Giants,0,3,2
 823897,2026-09-22,Los Angeles Dodgers,San Diego Padres,1,7,0
 823897,2026-09-22,San Diego Padres,Los Angeles Dodgers,0,0,7
+823326,2026-09-24,Pittsburgh Pirates,St. Louis Cardinals,1,2,1
+823326,2026-09-24,St. Louis Cardinals,Pittsburgh Pirates,0,1,2
+824059,2026-09-24,Kansas City Royals,Chicago White Sox,1,1,9
+824059,2026-09-24,Chicago White Sox,Kansas City Royals,0,9,1
+824623,2026-09-24,Chicago Cubs,Miami Marlins,1,2,1
+824623,2026-09-24,Miami Marlins,Chicago Cubs,0,1,2
+822842,2026-09-24,Texas Rangers,New York Mets,1,3,1
+822842,2026-09-24,New York Mets,Texas Rangers,0,1,3
+824298,2026-09-24,Colorado Rockies,Arizona Diamondbacks,1,8,12
+824298,2026-09-24,Arizona Diamondbacks,Colorado Rockies,0,12,8
+823411,2026-09-24,Philadelphia Phillies,Milwaukee Brewers,1,1,5
+823411,2026-09-24,Milwaukee Brewers,Philadelphia Phillies,0,5,1
+824707,2026-09-24,Boston Red Sox,Cleveland Guardians,1,0,1
+824707,2026-09-24,Cleveland Guardians,Boston Red Sox,0,1,0
+823493,2026-09-24,New York Yankees,Tampa Bay Rays,1,6,4
+823493,2026-09-24,Tampa Bay Rays,New York Yankees,0,4,6
+824866,2026-09-24,Atlanta Braves,Cincinnati Reds,1,6,7
+824866,2026-09-24,Cincinnati Reds,Atlanta Braves,0,7,6
+824950,2026-09-24,Athletics,Houston Astros,1,5,7
+824950,2026-09-24,Houston Astros,Athletics,0,7,5
+823087,2026-09-24,Seattle Mariners,Los Angeles Angels,1,4,6
+823087,2026-09-24,Los Angeles Angels,Seattle Mariners,0,6,4
+823895,2026-09-24,Los Angeles Dodgers,San Diego Padres,1,2,4
+823895,2026-09-24,San Diego Padres,Los Angeles Dodgers,0,4,2

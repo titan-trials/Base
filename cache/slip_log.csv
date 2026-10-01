@@ -99,3 +99,22 @@ window,tier,n_legs,n_graded,slip_p,legs_hit,hit,n_games,solo,correlated,legs,gam
 2,SAFE,3,3,0.4069305906447505,2.0,0.0,1,True,True,Corbin Carroll H+R+RBI 0.5 + Hunter Goodman H+R+RBI 0.5 + Ketel Marte H+R+RBI 0.5,2026-09-22
 3,LOTTO,3,3,0.0077793415896531,1.0,0.0,4,False,False,Yordan Alvarez HR + Max Muncy HR + Shea Langeliers HR,2026-09-22
 3,SAFE,3,3,0.400885090286783,3.0,1.0,4,False,False,Yordan Alvarez H+R+RBI 0.5 + Mookie Betts H+R+RBI 0.5 + Mike Trout H+R+RBI 0.5,2026-09-22
+0,LOTTO,3,3,0.0008882456409001,0.0,0.0,1,True,True,Brandon Lowe HR + Oneil Cruz Hits 2.5 + Ryan O'Hearn Hits 2.5,2026-09-24
+0,MEDIUM,3,3,0.0816420372669729,0.0,0.0,1,True,True,JJ Wetherholt Walk + Oneil Cruz Walk + Iván Herrera Walk,2026-09-24
+0,MIXED,3,3,0.1368293025800946,1.0,0.0,1,True,True,Oneil Cruz H+R+RBI 0.5 + JJ Wetherholt Walk + Iván Herrera Walk,2026-09-24
+0,SAFE,3,3,0.3754521112859877,2.0,0.0,1,True,True,Oneil Cruz H+R+RBI 0.5 + Brandon Lowe H+R+RBI 0.5 + Ryan O'Hearn H+R+RBI 0.5,2026-09-24
+1,LOTTO,3,3,0.0114466719975976,0.0,0.0,3,False,False,Juan Soto HR + Pete Crow-Armstrong HR + Munetaka Murakami HR,2026-09-24
+1,MEDIUM,3,3,0.1527990157868737,1.0,0.0,3,False,False,Juan Soto Walk + Munetaka Murakami Walk + Michael Busch Walk,2026-09-24
+1,MIXED,3,3,0.2073991268222331,1.0,0.0,3,False,False,Juan Soto H+R+RBI 0.5 + Munetaka Murakami Walk + Michael Busch Walk,2026-09-24
+1,SAFE,3,3,0.4098647889065745,2.0,0.0,3,False,False,Juan Soto H+R+RBI 0.5 + Pete Crow-Armstrong H+R+RBI 0.5 + Sam Antonacci H+R+RBI 0.5,2026-09-24
+2,LOTTO,3,3,0.0045953870698501,0.0,0.0,1,True,True,Gabriel Moreno Hits 2.5 + Ketel Marte Hits 2.5 + Hunter Goodman HR,2026-09-24
+2,MEDIUM,3,3,0.0424977440111965,0.0,0.0,1,True,True,Hunter Goodman TB 3.5 + Gabriel Moreno Hits 1.5 + Ketel Marte Hits 1.5,2026-09-24
+2,MIXED,3,3,0.0829673246725005,1.0,0.0,1,True,True,Gabriel Moreno Hit + Hunter Goodman TB 3.5 + Ketel Marte Hits 1.5,2026-09-24
+2,SAFE,3,3,0.4545664119442783,3.0,1.0,1,True,True,Gabriel Moreno Hit + Ketel Marte H+R+RBI 0.5 + Nolan Arenado H+R+RBI 0.5,2026-09-24
+3,MEDIUM,3,3,0.0825021867619336,0.0,0.0,1,True,True,Jake Bauers Walk + Kyle Schwarber Walk + Luis Arraez Hits 1.5,2026-09-24
+4,LOTTO,3,3,0.003399442438982,0.0,0.0,3,False,False,Matt Olson HR + Junior Caminero HR + Steven Kwan Hits 2.5,2026-09-24
+4,MEDIUM,3,3,0.0994828130957633,2.0,0.0,3,False,False,Cam Schlittler Over 6.5 K + Mickey Gasper Walk + Mike Yastrzemski Walk,2026-09-24
+5,LOTTO,3,3,0.0131031535939718,0.0,0.0,3,False,False,Shohei Ohtani HR + Yordan Alvarez HR + Cal Raleigh HR,2026-09-24
+5,MEDIUM,3,3,0.0830789927121029,2.0,0.0,3,False,False,Grayson Rodriguez Under 4.5 K + Shohei Ohtani TB 3.5 + Isaac Paredes Walk,2026-09-24
+5,MIXED,4,4,0.063664342132997,3.0,0.0,3,False,True,Grayson Rodriguez Under 4.5 K + Yordan Alvarez H+R+RBI 0.5 + Shohei Ohtani TB 3.5 + Isaac Paredes Walk,2026-09-24
+5,SAFE,3,3,0.3368027222059635,3.0,1.0,3,False,False,Bryan Woo Over 6.5 K + Yordan Alvarez H+R+RBI 0.5 + Shohei Ohtani H+R+RBI 0.5,2026-09-24
